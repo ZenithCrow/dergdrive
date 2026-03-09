@@ -13,7 +13,7 @@ pub const Iterator = struct {
         if (self.index >= self.buffer.len) return null;
 
         const chunk = try readChunk(self.buffer[self.index..]);
-        self.index += chunk.getWriteSize();
+        self.index += chunk.getWrittenSize();
 
         return chunk;
     }
@@ -57,12 +57,13 @@ chunk_type: ChunkType,
 header_buf: []u8,
 data: []u8,
 
-pub inline fn getWriteSize(self: Chunk) usize {
-    return header.header_size + self.data.len;
+/// the total size of the chunk including header and data
+pub inline fn getWrittenSize(self: Chunk) header.DataLenT {
+    return @as(header.DataLenT, header.header_size + self.data.len);
 }
 
 pub inline fn updateSizeHeader(self: Chunk) void {
-    std.mem.writeInt(usize, self.header_buf[header.header_title_size..header.header_size], self.data.len, .little);
+    std.mem.writeInt(header.DataLenT, self.header_buf[header.header_title_size..header.header_size], self.data.len, .little);
 }
 
 pub fn readChunk(buffer: []u8) ReadError!Chunk {

@@ -66,7 +66,7 @@ test "non-payload size matches" {
     var id_supply = sync.RequestChunk.IdSupplier{};
 
     const tfm: TransmitFileMsg = try .init(&buf, &id_supply);
-    try std.testing.expectEqual(non_payload_size, try tfm.msg_container.getWriteSize());
+    try std.testing.expectEqual(non_payload_size, try tfm.msg_container.getWrittenSize());
 }
 
 test "newMsg payload size matches" {
@@ -77,5 +77,5 @@ test "newMsg payload size matches" {
     var tfm: TransmitFileMsg = try .init(&buf, &id_supply);
     const pld_buf = try tfm.newMsg(payload_size, .file_post);
     try std.testing.expectEqual(payload_size, pld_buf.len);
-    try std.testing.expectEqual(payload_size + TransmitFileMsg.non_payload_size, try tfm.msg_container.getWriteSize());
+    try std.testing.expectEqual(payload_size + TransmitFileMsg.non_payload_size, try tfm.msg_container.getWrittenSize());
 }

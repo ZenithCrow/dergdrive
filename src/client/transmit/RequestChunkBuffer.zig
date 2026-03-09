@@ -1,8 +1,10 @@
 const std = @import("std");
-const ChunkBuffer = @import("ChunkBuffer.zig");
+
 const sync = @import("dergdrive").proto.sync;
 const IdSupplier = sync.RequestChunk.IdSupplier;
 const TransmitFileMsg = sync.templates.TransmitFileMsg;
+
+const ChunkBuffer = @import("ChunkBuffer.zig");
 
 const RequestChunkBuffer = @This();
 
@@ -19,6 +21,7 @@ pub fn init(id_supply: *IdSupplier) RequestChunkBuffer {
         .id_supply = id_supply,
     };
 
+    // TODO I'm not so sure about this, since it is inherently a memory leak, but maybe I had reasons for this in the past?
     rcb.sync_msg = .{ .msg_buf = &rcb.chunk_buf };
 
     return rcb;

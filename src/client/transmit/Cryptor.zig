@@ -1,11 +1,15 @@
 const std = @import("std");
+const Thread = std.Thread;
+
+const crypt = @import("dergdrive").crypt;
+pub const enc_add_info_len = crypt.nonce_auth_len;
+const sync = @import("dergdrive").proto.sync;
+
+const pipe_adapter = @import("pipe_adapter.zig");
 const RawFileChunkBuffer = @import("RawFileChunkBuffer.zig");
 const RequestChunkBuffer = @import("RequestChunkBuffer.zig");
-const Thread = std.Thread;
-const crypt = @import("dergdrive").crypt;
+
 const AtomicBool = std.atomic.Value(bool);
-const sync = @import("dergdrive").proto.sync;
-const pipe_adapter = @import("pipe_adapter.zig");
 
 pub const CryptorCluster = struct {
     pub const CryptDir = enum {
@@ -67,8 +71,6 @@ pub const CryptorCluster = struct {
         self.th_pool.deinit();
     }
 };
-
-pub const enc_add_info_len = crypt.nonce_auth_len;
 
 const Cryptor = @This();
 

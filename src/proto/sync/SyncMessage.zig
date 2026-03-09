@@ -19,23 +19,29 @@ pub fn dataBuf(self: SyncMessage) []u8 {
     return self.msg_buf[header.header_size..];
 }
 
-pub fn dataSize(self: SyncMessage) Chunk.ReadError!usize {
+/// the total size of data in the message excluding the size header
+pub fn dataSize(self: SyncMessage) Chunk.ReadError!header.DataLenT {
     var chunk_iter = try iterFromBuf(self.msg_buf);
-    var total_size: usize = 0;
+    var total_size: header.DataLenT = 0;
 
     while (chunk_iter.next() catch return total_size) |chunk| {
-        total_size += chunk.getWriteSize();
+        total_size += chunk.getWrittenSize();
     }
 
     return total_size;
 }
 
-pub inline fn getWriteSize(self: SyncMessage) Chunk.ReadError!usize {
+/// the total size of the message including header and data
+pub inline fn getWrittenSize(self: SyncMessage) Chunk.ReadError!header.DataLenT {
     return header.header_size + try self.dataSize();
 }
 
+pub inline fn readWrittenSize(self: SyncMessage) header.DataLenT {
+    return std.mem.readInt(header.DataLenT, self.msg_buf[header.header_title_size..header.header_size], .little);
+}
+
 inline fn writeSize(self: SyncMessage, size: header.DataLenT) void {
-    std.mem.writeInt(usize, self.msg_buf[header.header_title_size..header.header_size], size, .little);
+    std.mem.writeInt(header.DataLenT, self.msg_buf[header.header_title_size..header.header_size], size, .little);
 }
 
 pub inline fn updateSizeHeader(self: SyncMessage) Chunk.ReadError!void {

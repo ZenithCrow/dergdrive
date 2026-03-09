@@ -1,0 +1,24 @@
+manifest format:
+
+timestamp
+    128-bit time
+    32-bit last updated device id
+
+overridable prefixes
+    32-bit length
+    [
+        32-bit prefix id (other than 0)
+        null terminated prefix
+    ]
+
+file records
+    64-bit records length
+    [
+        null terminated file path name
+        128-bit time
+        32-bit last updated device id
+        32-bit prefix id (0 if no prefix assigned)
+        32-bit block index
+        32-bit index (offset in block)
+        64-bit length
+    ] 

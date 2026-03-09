@@ -1,7 +1,8 @@
 const std = @import("std");
+const Mutex = std.Thread.Mutex;
+
 const Chunk = @import("Chunk.zig");
 const SyncMessage = @import("SyncMessage.zig");
-const Mutex = std.Thread.Mutex;
 
 const RequestChunk = @This();
 
