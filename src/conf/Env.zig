@@ -1,198 +1,129 @@
 const std = @import("std");
-const conf = @import("conf.zig");
+
+const Conf = @import("Conf.zig");
 
 const Env = @This();
 
-const KeyValueIterator = struct {
-    pub const InitError = std.mem.Allocator.Error || std.fs.File.StatError || std.fs.File.ReadError;
+pub const StoreEnvsError = std.mem.Allocator.Error || Conf.OpenOrCreateConfFileError || std.fs.File.WriteError;
 
-    pub const KVPair = struct {
-        key: []const u8,
-        value: []const u8,
-    };
+pub const EnvValue = struct {
+    val: []const u8,
+    conf_file: Conf.ConfFile,
+    runtime_modified: bool = false,
+};
 
-    env_file: std.fs.File,
-    line_iter: std.mem.SplitIterator(u8, .any),
+const ConfFileContext = struct {
     allocator: std.mem.Allocator,
+    conf: Conf,
 
-    pub fn init(
-        allocator: std.mem.Allocator,
-        env_file: std.fs.File,
-    ) InitError!KeyValueIterator {
-        const stat = try env_file.stat();
-        const buf = try allocator.alloc(u8, stat.size);
+    pub fn hash(self: ConfFileContext, c: Conf.ConfFile) u64 {
+        var key = c.getFullPath(self.conf, self.allocator) catch return 0;
+        defer self.allocator.free(key);
 
-        const bytes_read = try env_file.read(buf);
-        std.debug.assert(bytes_read == stat.size);
+        var h: std.hash.Wyhash = .init(0);
 
-        return .{
-            .env_file = env_file,
-            .line_iter = std.mem.splitAny(u8, buf, "\r\n"),
-            .allocator = allocator,
-        };
+        while (key.len >= 64) : (key = key[64..]) {
+            h.update(key[0..64]);
+        }
+
+        if (key.len > 0)
+            h.update(key);
+
+        return h.final();
     }
 
-    pub fn deinit(self: KeyValueIterator) void {
-        self.allocator.free(self.line_iter.buffer);
-    }
-
-    pub fn refresh(self: *KeyValueIterator) InitError!void {
-        self.deinit();
-        self = try .init(self.allocator, self.env_file);
-    }
-
-    pub fn next(self: *KeyValueIterator) ?KVPair {
-        return while (self.line_iter.next()) |line| {
-            const trimmed = std.mem.trim(u8, line, " \t");
-            if (trimmed.len > 0 and trimmed[0] != '#') {
-                if (std.mem.indexOfScalar(u8, trimmed, kv_delim)) |delim| {
-                    return .{
-                        .key = line[0..delim],
-                        .value = line[delim + 1 ..],
-                    };
-                }
-            }
-        } else null;
+    pub fn eql(self: ConfFileContext, x: Conf.ConfFile, y: Conf.ConfFile) bool {
+        const a = x.getFullPath(self.conf, self.allocator) catch return false;
+        const b = y.getFullPath(self.conf, self.allocator) catch return false;
+        return std.mem.eql(u8, a, b);
     }
 };
 
-pub const GetIteratorError = std.mem.Allocator.Error || conf.CreateConfFileError || KeyValueIterator.InitError;
+pub var g_env: Env = undefined;
 
-pub var env: Env = undefined;
-
-pub const kv_delim: u8 = '=';
-
-loaded_envs: std.StringHashMap(KeyValueIterator),
+env_registry: std.StringArrayHashMap(EnvValue),
+modified_envs: std.ArrayHashMap(Conf.ConfFile, void, ConfFileContext, true),
 allocator: std.mem.Allocator,
+conf: Conf,
 
-pub fn init(allocator: std.mem.Allocator) Env {
-    return Env{
-        .loaded_envs = .init(allocator),
+pub fn initGlobal(conf: Conf, allocator: std.mem.Allocator) void {
+    g_env = .{
+        .conf = conf,
+        .env_registry = .init(allocator),
+        .modified_envs = .initContext(allocator, .{ .allocator = allocator, .conf = conf }),
         .allocator = allocator,
     };
 }
 
-pub fn deinit(self: *Env) void {
-    var iter = self.loaded_envs.iterator();
-    while (iter.next()) |entry| {
-        entry.value_ptr.env_file.close();
-        entry.value_ptr.deinit();
-        self.allocator.free(entry.key_ptr.*);
-    }
+pub fn loadEnvs(self: *Env) std.mem.Allocator.Error!void {
+    for (Conf.conf_file_hierarchy) |env_conf_file| {
+        //  TODO: distinguish between file not found and open/allocation errors
+        var env_iter: Conf.KeyValueIterator = .init(self.conf.getConf(env_conf_file, self.allocator) catch continue);
+        defer self.allocator.free(env_iter.line_iter.buffer);
 
-    self.loaded_envs.deinit();
-}
-
-fn getIteratorPtr(self: *Env, env_file: conf.ConfFile) GetIteratorError!*KeyValueIterator {
-    const full_path = try env_file.getFullPath(self.allocator);
-
-    const res = try self.loaded_envs.getOrPut(full_path);
-    if (!res.found_existing) {
-        const file = try conf.createConfFile(env_file, true, self.allocator);
-        errdefer file.close();
-
-        res.value_ptr.* = try .init(self.allocator, file);
-    }
-
-    if (res.found_existing)
-        self.allocator.free(full_path);
-
-    return res.value_ptr;
-}
-
-fn refreshIterFile(self: *Env, iter: *KeyValueIterator, env_file: conf.ConfFile) GetIteratorError!void {
-    iter.env_file.close();
-    iter.env_file = try conf.createConfFile(env_file, true, self.allocator);
-}
-
-pub fn get(self: *Env, env_file: conf.ConfFile, key: []const u8) GetIteratorError!?[]const u8 {
-    const iter = try self.getIteratorPtr(env_file);
-    iter.line_iter.index = 0;
-    return while (iter.next()) |entry| {
-        if (std.mem.eql(u8, entry.key, key))
-            break entry.value;
-    } else null;
-}
-
-pub fn set(self: *Env, env_file: conf.ConfFile, key: []const u8, value: []const u8) (GetIteratorError || std.fs.File.WriteError)!void {
-    var iter = try self.getIteratorPtr(env_file);
-    try self.refreshIterFile(iter, env_file);
-    iter.line_iter.index = 0;
-
-    var key_len: usize = 0;
-    var val_len: usize = 0;
-    var index: usize = 0;
-    const insert = while (iter.next()) |entry| : ({
-        if (iter.line_iter.index) |i|
-            index = i;
-    }) {
-        if (std.mem.eql(u8, entry.key, key)) {
-            key_len = entry.key.len;
-            val_len = entry.value.len;
-            break true;
+        while (env_iter.next()) |kv_pair| {
+            self.env_registry.put(try self.allocator.dupe(u8, kv_pair.key), .{
+                .val = try self.allocator.dupe(u8, kv_pair.value),
+                .conf_file = env_conf_file,
+            });
         }
-    } else false;
+    }
+}
 
-    var buf: []u8 = @constCast(iter.line_iter.buffer);
+pub fn storeEnvs(self: Env) StoreEnvsError!void {
+    // split between all the writers
+    const write_buf_size = 4096;
+    var write_buf: [write_buf_size]u8 = undefined;
 
-    if (insert) {
-        const tail_index = index + key_len + val_len + 1;
-        const len_diff: isize = @bitCast(value.len -% val_len);
-        const old_len = buf.len;
-        const new_len: usize = @bitCast(@as(isize, @bitCast(buf.len)) + len_diff);
+    const env_count = self.modified_envs.count();
 
-        // move before resizing if the new length is smaller to avoid clipping
-        if (new_len < buf.len)
-            @memmove(buf[@bitCast(@as(isize, @bitCast(tail_index)) + len_diff)..new_len], buf[tail_index..]);
+    const env_writers = try self.allocator.alloc(std.fs.File.Writer, env_count);
+    defer self.allocator.free(env_writers);
 
-        buf = try iter.allocator.realloc(buf, new_len);
-
-        if (new_len >= old_len)
-            @memmove(buf[@bitCast(@as(isize, @bitCast(tail_index)) + len_diff)..], buf[tail_index..old_len]);
-
-        const value_index = index + key_len + 1;
-        @memcpy(buf[value_index .. value_index + value.len], value);
-    } else {
-        var old_len = buf.len;
-        const line_break = old_len != 0 and buf[old_len - 1] == '\n' or old_len == 0;
-
-        if (!line_break)
-            old_len += 1;
-
-        const new_len = old_len + key.len + value.len + 1;
-        buf = try iter.allocator.realloc(buf, new_len);
-
-        if (!line_break)
-            buf[old_len - 1] = '\n';
-
-        @memcpy(buf[old_len .. old_len + key.len], key);
-        buf[old_len + key.len] = kv_delim;
-        @memcpy(buf[old_len + key.len + 1 ..], value);
+    for (self.modified_envs.keys(), 0..) |env, i| {
+        const buf_part = write_buf_size / env_count;
+        env_writers[i] = (try self.conf.openOrCreateConfFile(env, true, self.allocator)).writer(write_buf[buf_part * i .. buf_part * i + buf_part]);
+    }
+    defer {
+        for (env_writers) |w| {
+            w.file.close();
+        }
     }
 
-    iter.line_iter.buffer = buf;
-    const bytes_written = try iter.env_file.write(buf);
-    std.debug.assert(bytes_written == buf.len);
+    var iter = self.env_registry.iterator();
+    while (iter.next()) |kv| {
+        var w = env_writers[self.modified_envs.getIndex(kv.value_ptr.conf_file) orelse continue];
+        w.interface.print("{s}={s}\n", .{ kv.key_ptr.*, kv.value_ptr.val }) catch return w.err;
+    }
+
+    for (env_writers) |w| {
+        w.interface.flush() catch return w.err;
+    }
 }
 
-test "env" {
-    env = .init(std.testing.allocator);
-    defer env.deinit();
-
-    const test_file: conf.ConfFile = .{
-        .nspace = .internal,
-        .sub_path = "test.env",
-    };
-
-    try env.set(test_file, "key1", "owo");
-    try env.set(test_file, "key2", "bar");
-    try env.set(test_file, "key1", "foooo");
-
-    var val1 = try env.get(test_file, "key1");
-    try std.testing.expect(std.mem.eql(u8, val1.?, "foooo"));
-
-    try env.set(test_file, "key1", "owo");
-
-    val1 = try env.get(test_file, "key1");
-    try std.testing.expect(std.mem.eql(u8, val1.?, "owo"));
+pub fn get(self: Env, key: []const u8) ?[]const u8 {
+    if (self.env_registry.get(key)) |env_val| env_val.val else null;
 }
+
+pub fn set(self: *Env, key: []const u8, val: []const u8, conf_file: ?Conf.ConfFile) std.mem.Allocator.Error!void {
+    const res = try self.env_registry.getOrPut(key);
+    if (res.found_existing) {
+        if (!std.mem.eql(u8, val, res.value_ptr.val)) {
+            res.value_ptr.runtime_modified = true;
+            res.value_ptr.val = val;
+        }
+
+        if (conf_file != null) {
+            res.value_ptr.conf_file = conf_file;
+            res.value_ptr.runtime_modified = true;
+        }
+    } else {
+        res.value_ptr.* = .{
+            .val = val,
+            .conf_file = conf_file orelse Conf.conf_file_default,
+            .runtime_modified = true,
+        };
+    }
+}
+
+//  TODO: tests!!!
