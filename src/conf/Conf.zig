@@ -6,9 +6,10 @@ const Conf = @This();
 const proj_name: []const u8 = "dergdrive";
 
 pub const GetFileContentError = std.fs.File.StatError || std.mem.Allocator.Error || std.fs.File.ReadError;
-pub const GetFileContentFromPathError = OpenOrCreateConfFileError;
+pub const GetFileContentFromPathError = GetFileContentError || std.fs.File.OpenError;
 pub const OpenOrCreateConfFileError = std.fs.Dir.MakeError || std.fs.Dir.OpenError || std.fs.Dir.StatError || std.fs.File.OpenError || std.mem.Allocator.Error || std.fs.File.ChmodError;
 pub const WriteConfFileError = OpenOrCreateConfFileError || std.fs.File.WriteError;
+pub const GetConfError = GetFileContentError || GetFileContentFromPathError || OpenOrCreateConfFileError;
 
 const global_linux: []const u8 = "/etc/" ++ proj_name;
 const local_linux: []const u8 = "~/.config/" ++ proj_name;
@@ -16,21 +17,38 @@ const vol_local_linux: []const u8 = local_linux ++ "/{vol}";
 const secret_linux: []const u8 = local_linux ++ "/secret";
 const internal: []const u8 = ".";
 
-pub const LocNamespace = enum {
+pub const ConfPrefix = struct {
+    global_linux: []const u8 = global_linux,
+    local_linux: []const u8 = local_linux,
+    vol_local_linux: []const u8 = vol_local_linux,
+    secret_linux: []const u8 = secret_linux,
+    internal: []const u8 = internal,
+};
+
+pub const LocNspace = enum {
     global,
     local,
     vol_local,
     internal,
     secret,
+};
 
-    pub fn getRoot(namespace: LocNamespace) []const u8 {
+pub const PfixNspace = struct {
+    nspace: LocNspace,
+    pfix: ConfPrefix = .{},
+
+    pub fn from(nspace: LocNspace) PfixNspace {
+        return .{ .nspace = nspace };
+    }
+
+    pub fn getRoot(self: PfixNspace) []const u8 {
         return switch (builtin.os.tag) {
-            .linux => switch (namespace) {
-                .global => global_linux,
-                .local => local_linux,
-                .vol_local => vol_local_linux,
-                .internal => internal,
-                .secret => secret_linux,
+            .linux => switch (self.nspace) {
+                .global => self.pfix.global_linux,
+                .local => self.pfix.local_linux,
+                .vol_local => self.pfix.vol_local_linux,
+                .internal => self.pfix.internal,
+                .secret => self.pfix.secret_linux,
             },
             else => @compileError("implement this for your os if you want it so bad"),
         };
@@ -38,9 +56,9 @@ pub const LocNamespace = enum {
 };
 
 pub const ConfFile = struct {
-    nspace: LocNamespace,
+    nspace: PfixNspace,
     sub_path: []const u8,
-    always_create: bool,
+    always_create: bool = false,
 
     pub fn getFullPath(self: ConfFile, conf: Conf, allocator: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
         const root_path = self.nspace.getRoot();
@@ -80,21 +98,23 @@ pub const KeyValueIterator = struct {
 };
 
 const config_filename = "config";
-pub const conf_file_default: ConfFile = .{ .nspace = .local, .sub_path = config_filename, .always_create = true };
-pub const conf_file_hierarchy: []const ConfFile = switch (builtin.os.tag) {
+pub const g_conf_file_default: ConfFile = .{ .nspace = .from(.local), .sub_path = config_filename, .always_create = true };
+pub const g_conf_file_hierarchy: []const ConfFile = switch (builtin.os.tag) {
     .linux => &.{
-        .{ .nspace = .global, .sub_path = config_filename, .always_create = false },
-        conf_file_default,
-        .{ .nspace = .vol_local, .sub_path = config_filename, .always_create = false },
+        .{ .nspace = .from(.global), .sub_path = config_filename, .always_create = false },
+        g_conf_file_default,
+        .{ .nspace = .from(.vol_local), .sub_path = config_filename, .always_create = false },
     },
     else => @compileError("implement this for your os if you want it so bad"),
 };
 
 pub var g_conf: Conf = undefined;
 
+conf_file_default: ConfFile = g_conf_file_default,
+conf_file_hierarchy: []const ConfFile = g_conf_file_hierarchy,
 vol: []const u8,
 
-pub fn initGlobal(vol: []const u8) Conf {
+pub fn initGlobal(vol: []const u8) void {
     g_conf = .{ .vol = vol };
 }
 
@@ -130,11 +150,16 @@ fn getFileContentFromPath(path: []const u8, allocator: std.mem.Allocator) GetFil
 }
 
 fn getFileContent(file: std.fs.File, allocator: std.mem.Allocator) GetFileContentError![]const u8 {
-    return file.readToEndAlloc(allocator, std.math.maxInt(usize));
+    var reader = file.reader(&.{});
+    return reader.interface.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
+        std.Io.Reader.ShortError.ReadFailed => return reader.err.?,
+        std.Io.Reader.LimitedAllocError.StreamTooLong => unreachable,
+        else => return std.mem.Allocator.Error.OutOfMemory,
+    };
 }
 
-pub fn getConf(self: Conf, conf_file: ConfFile, allocator: std.mem.Allocator) GetFileContentFromPathError![]const u8 {
-    return if (conf_file.always_create) self.openOrCreateConfFile(conf_file, false, allocator) else {
+pub fn getConf(self: Conf, conf_file: ConfFile, allocator: std.mem.Allocator) GetConfError![]const u8 {
+    return if (conf_file.always_create) getFileContent(try self.openOrCreateConfFile(conf_file, false, allocator), allocator) else {
         const full_path = try conf_file.getFullPath(self, allocator);
         defer allocator.free(full_path);
 
@@ -158,7 +183,7 @@ pub fn openOrCreateConfFile(self: Conf, conf_file: ConfFile, truncate: bool, all
     const file = try dir.createFile(file_path, .{ .read = true, .truncate = truncate });
     errdefer file.close();
 
-    if (conf_file.nspace == .secret)
+    if (conf_file.nspace.nspace == .secret)
         try file.chmod(0o600);
 
     return file;
@@ -169,10 +194,10 @@ pub fn writeConfFile(self: Conf, conf_file: ConfFile, truncate: bool, data: []co
     errdefer file.close();
 
     var writer = file.writer(&.{});
-    return writer.interface.writeAll(data) catch writer.err;
+    return writer.interface.writeAll(data) catch writer.err.?;
 }
 
-pub fn get(self: Conf, env_file: ConfFile, key: []const u8, allocator: std.mem.Allocator) GetFileContentFromPathError!?[]const u8 {
+pub fn get(self: Conf, env_file: ConfFile, key: []const u8, allocator: std.mem.Allocator) GetConfError!?[]const u8 {
     const iter: KeyValueIterator = .init(try self.getConf(env_file, allocator));
     defer allocator.free(iter.line_iter.buffer);
     return if (getFromIter(iter, key)) |value| try allocator.dupe(u8, value) else null;
@@ -251,7 +276,7 @@ test "config key value pairs" {
     const c: Conf = .{ .vol = "" };
 
     const test_file: ConfFile = .{
-        .nspace = .internal,
+        .nspace = .from(.internal),
         .sub_path = "test.env",
         .always_create = true,
     };
