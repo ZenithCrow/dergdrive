@@ -6,6 +6,8 @@ const Env = @This();
 
 pub const StoreEnvsError = std.mem.Allocator.Error || Conf.OpenOrCreateConfFileError || std.fs.File.WriteError;
 
+const log = std.log.scoped(.@"conf/env");
+
 pub const EnvValue = struct {
     val: []const u8,
     conf_file: Conf.ConfFile,
@@ -76,8 +78,14 @@ pub fn deinit(self: *Env) void {
 
 pub fn loadEnvs(self: *Env) std.mem.Allocator.Error!void {
     for (self.conf.conf_file_hierarchy) |env_conf_file| {
-        //  TODO: distinguish between file not found and open/allocation errors
-        var env_iter: Conf.KeyValueIterator = .init(self.conf.getConf(env_conf_file, self.allocator) catch continue);
+        var env_iter: Conf.KeyValueIterator = .init(self.conf.getConf(env_conf_file, self.allocator) catch |err| switch (err) {
+            Conf.GetConfError.OutOfMemory => return Conf.GetConfError.OutOfMemory,
+            Conf.GetConfError.FileNotFound => continue,
+            else => {
+                log.warn("config file {f} could not be opened: {s}", .{ env_conf_file, @errorName(err) });
+                continue;
+            },
+        });
         defer self.allocator.free(env_iter.line_iter.buffer);
 
         while (env_iter.next()) |kv_pair| {

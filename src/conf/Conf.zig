@@ -10,6 +10,7 @@ pub const GetFileContentFromPathError = GetFileContentError || std.fs.File.OpenE
 pub const OpenOrCreateConfFileError = std.fs.Dir.MakeError || std.fs.Dir.OpenError || std.fs.Dir.StatError || std.fs.File.OpenError || std.mem.Allocator.Error || std.fs.File.ChmodError;
 pub const WriteConfFileError = OpenOrCreateConfFileError || std.fs.File.WriteError;
 pub const GetConfError = GetFileContentError || GetFileContentFromPathError || OpenOrCreateConfFileError;
+pub const SetError = GetFileContentError || OpenOrCreateConfFileError || std.fs.File.SeekError || std.fs.File.SetEndPosError || std.fs.File.WriteError;
 
 const global_linux: []const u8 = "/etc/" ++ proj_name;
 const local_linux: []const u8 = "~/.config/" ++ proj_name;
@@ -66,6 +67,13 @@ pub const ConfFile = struct {
         defer allocator.free(expanded);
         return std.mem.join(allocator, "/", &.{ expanded, self.sub_path });
     }
+
+    pub fn format(
+        self: @This(),
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        try writer.print("{s}/{s}", .{ self.nspace.getRoot(), self.sub_path });
+    }
 };
 
 pub const kv_delim: u8 = '=';
@@ -98,8 +106,8 @@ pub const KeyValueIterator = struct {
 };
 
 const config_filename = "config";
-pub const g_conf_file_default: ConfFile = .{ .nspace = .from(.local), .sub_path = config_filename, .always_create = true };
-pub const g_conf_file_hierarchy: []const ConfFile = switch (builtin.os.tag) {
+const g_conf_file_default: ConfFile = .{ .nspace = .from(.local), .sub_path = config_filename, .always_create = true };
+const g_conf_file_hierarchy: []const ConfFile = switch (builtin.os.tag) {
     .linux => &.{
         .{ .nspace = .from(.global), .sub_path = config_filename, .always_create = false },
         g_conf_file_default,
@@ -212,9 +220,14 @@ pub fn getFromIter(kv_iter: KeyValueIterator, key: []const u8) ?[]const u8 {
     } else null;
 }
 
-pub fn set(self: Conf, env_file: ConfFile, key: []const u8, value: []const u8, allocator: std.mem.Allocator) (GetFileContentFromPathError || WriteConfFileError)!void {
-    var iter: KeyValueIterator = .init(try self.getConf(env_file, allocator));
-    defer allocator.free(iter.line_iter.buffer);
+pub fn set(self: Conf, env_file: ConfFile, key: []const u8, value: []const u8, allocator: std.mem.Allocator) SetError!void {
+    const file = try self.openOrCreateConfFile(env_file, false, allocator);
+    defer file.close();
+    const buf = try getFileContent(file, allocator);
+    defer allocator.free(buf);
+    var iter: KeyValueIterator = .init(buf);
+
+    var writer = file.writer(&.{});
 
     var key_len: usize = 0;
     var val_len: usize = 0;
@@ -230,45 +243,25 @@ pub fn set(self: Conf, env_file: ConfFile, key: []const u8, value: []const u8, a
         }
     } else false;
 
-    var buf: []u8 = @constCast(iter.line_iter.buffer);
-
     if (insert) {
         const tail_index = index + key_len + val_len + 1;
         const len_diff: isize = @bitCast(value.len -% val_len);
-        const old_len = buf.len;
         const new_len: usize = @bitCast(@as(isize, @bitCast(buf.len)) + len_diff);
 
-        // move before resizing if the new length is smaller to avoid clipping
-        if (new_len < buf.len)
-            @memmove(buf[@bitCast(@as(isize, @bitCast(tail_index)) + len_diff)..new_len], buf[tail_index..]);
-
-        buf = try allocator.realloc(buf, new_len);
-
-        if (new_len >= old_len)
-            @memmove(buf[@bitCast(@as(isize, @bitCast(tail_index)) + len_diff)..], buf[tail_index..old_len]);
-
-        const value_index = index + key_len + 1;
-        @memcpy(buf[value_index .. value_index + value.len], value);
+        writer.seekTo(index + key_len + 1) catch return writer.seek_err.?;
+        writer.interface.writeAll(value) catch return writer.err.?;
+        writer.interface.writeAll(buf[tail_index..]) catch return writer.err.?;
+        try file.setEndPos(new_len);
     } else {
-        var old_len = buf.len;
-        const line_break = old_len != 0 and buf[old_len - 1] == '\n' or old_len == 0;
+        const end = try file.getEndPos();
+        const line_break = buf.len > 0 and buf[buf.len - 1] == '\n';
 
+        writer.seekTo(end) catch return writer.seek_err.?;
         if (!line_break)
-            old_len += 1;
+            writer.interface.writeByte('\n') catch return writer.err.?;
 
-        const new_len = old_len + key.len + value.len + 1;
-        buf = try allocator.realloc(buf, new_len);
-
-        if (!line_break)
-            buf[old_len - 1] = '\n';
-
-        @memcpy(buf[old_len .. old_len + key.len], key);
-        buf[old_len + key.len] = kv_delim;
-        @memcpy(buf[old_len + key.len + 1 ..], value);
+        writer.interface.print("{s}={s}\n", .{ key, value }) catch return writer.err.?;
     }
-
-    iter.line_iter.buffer = buf;
-    try self.writeConfFile(env_file, false, buf, allocator);
 }
 
 test "config key value pairs" {
@@ -277,7 +270,7 @@ test "config key value pairs" {
 
     const test_file: ConfFile = .{
         .nspace = .from(.internal),
-        .sub_path = "test.env",
+        .sub_path = ".test/test.env",
         .always_create = true,
     };
 
@@ -286,16 +279,22 @@ test "config key value pairs" {
     try c.set(test_file, "key1", "foooo", allocator);
 
     {
-        const val1 = try c.get(test_file, "key1", allocator);
-        defer allocator.free(val1.?);
-        try std.testing.expectEqualStrings(val1.?, "foooo");
+        const val1 = (try c.get(test_file, "key1", allocator)).?;
+        defer allocator.free(val1);
+        try std.testing.expectEqualStrings("foooo", val1);
     }
 
     try c.set(test_file, "key1", "owo", allocator);
 
     {
-        const val1 = try c.get(test_file, "key1", allocator);
-        defer allocator.free(val1.?);
-        try std.testing.expectEqualStrings(val1.?, "owo");
+        const val1 = (try c.get(test_file, "key1", allocator)).?;
+        defer allocator.free(val1);
+        try std.testing.expectEqualStrings("owo", val1);
+    }
+
+    {
+        const val2 = (try c.get(test_file, "key2", allocator)).?;
+        defer allocator.free(val2);
+        try std.testing.expectEqualStrings("bar", val2);
     }
 }
