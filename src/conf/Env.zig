@@ -166,11 +166,12 @@ test "env config" {
     defer allocator.free(hierarchy);
 
     const pfix: Conf.ConfPrefix = .{
-        .global_linux = ".test/global",
-        .internal = ".test/internal",
-        .local_linux = ".test/local",
-        .secret_linux = ".test/secret",
-        .vol_local_linux = ".test/vol",
+        .config_global_linux = ".test/global",
+        .config_internal = ".test/internal",
+        .config_local_linux = ".test/local",
+        .config_secret_linux = ".test/secret",
+        .config_vol_local_linux = ".test/{vol}",
+        .config_vol_secret_linux = ".test/{vol}/secret",
     };
 
     for (hierarchy) |*cf| {
@@ -192,10 +193,10 @@ test "env config" {
         try env.set("override me", "base", null);
         try std.testing.expectEqualStrings("base", env.get("override me").?);
 
-        try env.set("owo", "uwu", .{ .nspace = .{ .nspace = .global, .pfix = pfix }, .sub_path = "cowonfig.env" });
+        try env.set("owo", "uwu", .{ .nspace = .{ .nspace = .{ .config = .global }, .pfix = pfix }, .sub_path = "cowonfig.env" });
         try std.testing.expectEqualStrings("uwu", env.get("owo").?);
 
-        try env.set("yay", weird_value, .{ .nspace = .{ .nspace = .local, .pfix = pfix }, .sub_path = "config" });
+        try env.set("yay", weird_value, .{ .nspace = .{ .nspace = .{ .config = .local }, .pfix = pfix }, .sub_path = "config" });
         try std.testing.expectEqualStrings(weird_value, env.get("yay").?);
 
         try env.set("override me", "overridden", null);
@@ -207,7 +208,7 @@ test "env config" {
     }
 
     hierarchy = try allocator.realloc(hierarchy, hierarchy.len + 1);
-    hierarchy[hierarchy.len - 1] = .{ .nspace = .{ .nspace = .global, .pfix = pfix }, .sub_path = "cowonfig.env" };
+    hierarchy[hierarchy.len - 1] = .{ .nspace = .{ .nspace = .{ .config = .global }, .pfix = pfix }, .sub_path = "cowonfig.env" };
 
     conf.conf_file_hierarchy = hierarchy;
 

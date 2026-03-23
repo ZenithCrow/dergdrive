@@ -12,26 +12,49 @@ pub const WriteConfFileError = OpenOrCreateConfFileError || std.fs.File.WriteErr
 pub const GetConfError = GetFileContentError || GetFileContentFromPathError || OpenOrCreateConfFileError;
 pub const SetError = GetFileContentError || OpenOrCreateConfFileError || std.fs.File.SeekError || std.fs.File.SetEndPosError || std.fs.File.WriteError;
 
-const global_linux: []const u8 = "/etc/" ++ proj_name;
-const local_linux: []const u8 = "~/.config/" ++ proj_name;
-const vol_local_linux: []const u8 = local_linux ++ "/{vol}";
-const secret_linux: []const u8 = local_linux ++ "/secret";
-const internal: []const u8 = ".";
+const config_global_linux: []const u8 = "/etc/" ++ proj_name;
+const config_local_linux: []const u8 = "~/.config/" ++ proj_name;
+const config_vol_local_linux: []const u8 = config_local_linux ++ "/{vol}";
+const config_secret_linux: []const u8 = config_local_linux ++ "/secret";
+const config_vol_secret_linux: []const u8 = config_vol_local_linux ++ "/secret";
+const config_internal: []const u8 = ".";
+const cache_global_linux: []const u8 = "/var/cache/" ++ proj_name;
+const cache_local_linux: []const u8 = "~/.cache/" ++ proj_name;
+const cache_vol_local_linux: []const u8 = cache_local_linux ++ "/{vol}";
+const pers_global_linux: []const u8 = "/usr/share/" ++ proj_name;
+const pers_local_linux: []const u8 = "~/.local/share/" ++ proj_name;
+const pers_vol_local_linux: []const u8 = pers_local_linux ++ "/{vol}";
+const pers_internal_linux: []const u8 = ".";
 
 pub const ConfPrefix = struct {
-    global_linux: []const u8 = global_linux,
-    local_linux: []const u8 = local_linux,
-    vol_local_linux: []const u8 = vol_local_linux,
-    secret_linux: []const u8 = secret_linux,
-    internal: []const u8 = internal,
+    config_global_linux: []const u8 = config_global_linux,
+    config_local_linux: []const u8 = config_local_linux,
+    config_vol_local_linux: []const u8 = config_vol_local_linux,
+    config_secret_linux: []const u8 = config_secret_linux,
+    config_vol_secret_linux: []const u8 = config_vol_secret_linux,
+    config_internal: []const u8 = config_internal,
+    cache_global_linux: []const u8 = cache_global_linux,
+    cache_local_linux: []const u8 = cache_local_linux,
+    cache_vol_local_linux: []const u8 = cache_vol_local_linux,
+    pers_global_linux: []const u8 = pers_global_linux,
+    pers_local_linux: []const u8 = pers_local_linux,
+    pers_vol_local_linux: []const u8 = pers_vol_local_linux,
+    pers_internal_linux: []const u8 = pers_internal_linux,
 };
 
-pub const LocNspace = enum {
+pub const Nspace = enum {
     global,
     local,
     vol_local,
     internal,
     secret,
+    vol_secret,
+};
+
+pub const LocNspace = union(enum) {
+    config: Nspace,
+    cache: Nspace,
+    pers: Nspace,
 };
 
 pub const PfixNspace = struct {
@@ -45,11 +68,27 @@ pub const PfixNspace = struct {
     pub fn getRoot(self: PfixNspace) []const u8 {
         return switch (builtin.os.tag) {
             .linux => switch (self.nspace) {
-                .global => self.pfix.global_linux,
-                .local => self.pfix.local_linux,
-                .vol_local => self.pfix.vol_local_linux,
-                .internal => self.pfix.internal,
-                .secret => self.pfix.secret_linux,
+                .config => |nspace| switch (nspace) {
+                    .global => self.pfix.config_global_linux,
+                    .local => self.pfix.config_local_linux,
+                    .vol_local => self.pfix.config_vol_local_linux,
+                    .internal => self.pfix.config_internal,
+                    .secret => self.pfix.config_secret_linux,
+                    .vol_secret => self.pfix.config_vol_secret_linux,
+                },
+                .cache => |nspace| switch (nspace) {
+                    .global => self.pfix.cache_global_linux,
+                    .local => self.pfix.cache_local_linux,
+                    .vol_local => self.pfix.cache_vol_local_linux,
+                    else => @panic("namespace not supported for cache"),
+                },
+                .pers => |nspace| switch (nspace) {
+                    .global => self.pfix.pers_global_linux,
+                    .local => self.pfix.pers_local_linux,
+                    .vol_local => self.pfix.pers_vol_local_linux,
+                    .internal => self.pfix.pers_internal_linux,
+                    else => @panic("namespace not supported for persistent storage"),
+                },
             },
             else => @compileError("implement this for your os if you want it so bad"),
         };
@@ -106,20 +145,26 @@ pub const KeyValueIterator = struct {
 };
 
 const config_filename = "config";
-const g_conf_file_default: ConfFile = .{ .nspace = .from(.local), .sub_path = config_filename, .always_create = true };
+const g_conf_file_default: ConfFile = .{ .nspace = .from(.{ .config = .local }), .sub_path = config_filename, .always_create = true };
 const g_conf_file_hierarchy: []const ConfFile = switch (builtin.os.tag) {
     .linux => &.{
-        .{ .nspace = .from(.global), .sub_path = config_filename, .always_create = false },
+        .{ .nspace = .from(.{ .config = .global }), .sub_path = config_filename, .always_create = false },
         g_conf_file_default,
-        .{ .nspace = .from(.vol_local), .sub_path = config_filename, .always_create = false },
+        .{ .nspace = .from(.{ .config = .vol_local }), .sub_path = config_filename, .always_create = false },
     },
     else => @compileError("implement this for your os if you want it so bad"),
 };
+
+const g_mfest_cache: ConfFile = .{ .nspace = .from(.{ .cache = .vol_local }), .sub_path = "manifest" };
+const g_oride_prefixes: ConfFile = .{ .nspace = .from(.{ .config = .vol_local }), .sub_path = "prefix-overrides.ini" };
 
 pub var g_conf: Conf = undefined;
 
 conf_file_default: ConfFile = g_conf_file_default,
 conf_file_hierarchy: []const ConfFile = g_conf_file_hierarchy,
+mfest_cache: ConfFile = g_mfest_cache,
+oride_prefixes: ConfFile = g_oride_prefixes,
+
 vol: []const u8,
 
 pub fn initGlobal(vol: []const u8) void {
@@ -191,8 +236,9 @@ pub fn openOrCreateConfFile(self: Conf, conf_file: ConfFile, truncate: bool, all
     const file = try dir.createFile(file_path, .{ .read = true, .truncate = truncate });
     errdefer file.close();
 
-    if (conf_file.nspace.nspace == .secret)
-        try file.chmod(0o600);
+    switch (conf_file.nspace.nspace) {
+        .cache, .config, .pers => |nspace| if (nspace == .secret) try file.chmod(0o600),
+    }
 
     return file;
 }
@@ -269,7 +315,7 @@ test "config key value pairs" {
     const c: Conf = .{ .vol = "" };
 
     const test_file: ConfFile = .{
-        .nspace = .from(.internal),
+        .nspace = .from(.{ .config = .internal }),
         .sub_path = ".test/test.env",
         .always_create = true,
     };
