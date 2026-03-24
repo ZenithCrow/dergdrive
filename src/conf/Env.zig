@@ -82,7 +82,7 @@ pub fn loadEnvs(self: *Env) std.mem.Allocator.Error!void {
             Conf.GetConfError.OutOfMemory => return Conf.GetConfError.OutOfMemory,
             Conf.GetConfError.FileNotFound => continue,
             else => {
-                log.warn("Config file {f} could not be opened due to error: {s}.", .{ env_conf_file, @errorName(err) });
+                log.warn("Config file {f} could not be opened due to error: {t}.", .{ env_conf_file, err });
                 continue;
             },
         });

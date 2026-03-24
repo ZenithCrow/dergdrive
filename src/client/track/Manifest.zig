@@ -13,6 +13,9 @@ const log = std.log.scoped(.@"client/track/Manifest");
 const local_prefix_disclaimer: []const u8 = @embedFile("local-prefix-notice.txt");
 
 const LoadLocalPrefixOverridesError = error{CannotParse} || Conf.GetConfError || std.mem.Allocator.Error;
+const LoadFromManifestFileError = error{ManifestNotLoaded};
+const LoadManifestError = LoadFromManifestFileError || std.mem.Allocator.Error;
+const StoreManifestError = LoadFromManifestFileError || std.Io.Writer.Error;
 const OridePrefixIterator = struct {
     section_start: []const u8,
     byte_idx: usize = 0,
@@ -23,15 +26,15 @@ const OridePrefixIterator = struct {
         if (self.byte_idx >= self.section_start.len or self.elem_idx >= self.elem_len)
             return null;
 
-        const prefix = std.mem.span(self.section_start.ptr + self.byte_idx);
-        const id_start = @as(usize, @intCast(self.byte_idx)) + prefix.len;
+        const prefix = std.mem.span(@as([*:0]const u8, @ptrCast(self.section_start.ptr)) + self.byte_idx);
+        const id_start = self.byte_idx + prefix.len + 1;
 
         const oride_pfix: OridePrefix = .{
             .prefix = prefix,
-            .id = std.mem.bytesToValue(u32, self.section_start[id_start .. id_start + @sizeOf(u32)]),
+            .id = std.mem.readInt(u32, self.section_start[id_start .. id_start + @sizeOf(u32)][0..@sizeOf(u32)], .little),
         };
 
-        self.byte_idx += prefix.len + @sizeOf(u32);
+        self.byte_idx += prefix.len + 1 + @sizeOf(u32);
         self.elem_idx += 1;
 
         return oride_pfix;
@@ -48,22 +51,22 @@ const FileRecordIterator = struct {
         if (self.byte_idx >= self.section_start.len or self.elem_idx >= self.elem_len)
             return null;
 
-        const path = std.mem.span(self.section_start.ptr + self.byte_idx);
-        const fixed_data_start = @as(usize, @intCast(self.byte_idx)) + path.len;
+        const path = std.mem.span(@as([*:0]const u8, @ptrCast(self.section_start.ptr)) + self.byte_idx);
+        const fixed_data_start = self.byte_idx + path.len + 1;
 
         const file_record: FileRecord = .{
             .path = path,
             .tstamp = .{
-                .mod_time = std.mem.bytesToValue(i128, self.section_start[fixed_data_start .. fixed_data_start + @sizeOf(i128)]),
-                .mod_dev_id = std.mem.bytesToValue(u32, self.section_start[fixed_data_start + @sizeOf(i128) .. fixed_data_start + @sizeOf(i128) + @sizeOf(u32)]),
+                .mod_time = std.mem.readInt(i128, self.section_start[fixed_data_start .. fixed_data_start + @sizeOf(i128)][0..@sizeOf(i128)], .little),
+                .mod_dev_id = std.mem.readInt(u32, self.section_start[fixed_data_start + @sizeOf(i128) .. fixed_data_start + @sizeOf(i128) + @sizeOf(u32)][0..@sizeOf(u32)], .little),
             },
-            .pfix_id = std.mem.bytesToValue(u32, self.section_start[fixed_data_start + @sizeOf(i128) + @sizeOf(u32) .. fixed_data_start + @sizeOf(i128) + 2 * @sizeOf(u32)]),
-            .blk_idx = std.mem.bytesToValue(u32, self.section_start[fixed_data_start + @sizeOf(i128) + 2 * @sizeOf(u32) .. fixed_data_start + @sizeOf(i128) + 3 * @sizeOf(u32)]),
-            .offset = std.mem.bytesToValue(u32, self.section_start[fixed_data_start + @sizeOf(i128) + 3 * @sizeOf(u32) .. fixed_data_start + @sizeOf(i128) + 4 * @sizeOf(u32)]),
-            .length = std.mem.bytesToValue(u64, self.section_start[fixed_data_start + @sizeOf(i128) + 4 * @sizeOf(u32) .. fixed_data_start + @sizeOf(i128) + 4 * @sizeOf(u32) + @sizeOf(u64)]),
+            .pfix_id = std.mem.readInt(u32, self.section_start[fixed_data_start + @sizeOf(i128) + @sizeOf(u32) .. fixed_data_start + @sizeOf(i128) + 2 * @sizeOf(u32)][0..@sizeOf(u32)], .little),
+            .blk_idx = std.mem.readInt(u32, self.section_start[fixed_data_start + @sizeOf(i128) + 2 * @sizeOf(u32) .. fixed_data_start + @sizeOf(i128) + 3 * @sizeOf(u32)][0..@sizeOf(u32)], .little),
+            .offset = std.mem.readInt(u32, self.section_start[fixed_data_start + @sizeOf(i128) + 3 * @sizeOf(u32) .. fixed_data_start + @sizeOf(i128) + 4 * @sizeOf(u32)][0..@sizeOf(u32)], .little),
+            .length = std.mem.readInt(u64, self.section_start[fixed_data_start + @sizeOf(i128) + 4 * @sizeOf(u32) .. fixed_data_start + @sizeOf(i128) + 4 * @sizeOf(u32) + @sizeOf(u64)][0..@sizeOf(u64)], .little),
         };
 
-        self.byte_idx += path.len + @sizeOf(Timestamp) + 3 * @sizeOf(u32) + @sizeOf(u64);
+        self.byte_idx += path.len + 1 + @sizeOf(i128) + 4 * @sizeOf(u32) + @sizeOf(u64);
         self.elem_idx += 1;
 
         return file_record;
@@ -73,11 +76,27 @@ const FileRecordIterator = struct {
 const Timestamp = struct {
     mod_time: i128,
     mod_dev_id: u32,
+
+    pub fn format(
+        self: @This(),
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        try writer.writeInt(i128, self.mod_time, .little);
+        try writer.writeInt(u32, self.mod_dev_id, .little);
+    }
 };
 
 const OridePrefix = struct {
     prefix: []const u8,
     id: u32,
+
+    pub fn format(
+        self: @This(),
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        try writer.writeAll(self.prefix);
+        try writer.writeInt(u32, self.id, .little);
+    }
 };
 
 const FileRecord = struct {
@@ -90,12 +109,12 @@ const FileRecord = struct {
 
     pub fn format(self: FileRecord, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.writeAll(self.path);
-        try writer.writeAll(std.mem.asBytes(&self.tstamp.mod_time));
-        try writer.writeAll(std.mem.asBytes(&self.tstamp.mod_dev_id));
-        try writer.writeAll(std.mem.asBytes(&self.pfix_id));
-        try writer.writeAll(std.mem.asBytes(&self.blk_idx));
-        try writer.writeAll(std.mem.asBytes(&self.offset));
-        try writer.writeAll(std.mem.asBytes(&self.length));
+        try writer.writeInt(u8, 0, .little);
+        try self.tstamp.format(writer);
+        try writer.writeInt(u32, self.pfix_id, .little);
+        try writer.writeInt(u32, self.blk_idx, .little);
+        try writer.writeInt(u32, self.offset, .little);
+        try writer.writeInt(u64, self.length, .little);
     }
 };
 
@@ -167,19 +186,19 @@ pub fn deinit(self: *Manifest) void {
     self.oride_pfixes.deinit();
 }
 
-pub fn getSyncTimestamp(self: Manifest) ?Timestamp {
+pub fn getSyncTimestamp(self: Manifest) LoadFromManifestFileError!Timestamp {
     return if (self.mfest_file) |mfest| .{
-        .mod_time = std.mem.bytesToValue(i128, mfest[0..@sizeOf(i128)]),
-        .mod_dev_id = std.mem.bytesToValue(u32, mfest[@sizeOf(i128)..@sizeOf(Timestamp)]),
-    } else null;
+        .mod_time = std.mem.readInt(i128, mfest[0..@sizeOf(i128)], .little),
+        .mod_dev_id = std.mem.readInt(u32, mfest[@sizeOf(i128) .. @sizeOf(i128) + @sizeOf(u32)], .little),
+    } else LoadFromManifestFileError.ManifestNotLoaded;
 }
 
-pub fn loadCachedManifest(self: *Manifest) void {
+pub fn openCachedManifest(self: *Manifest) void {
     self.mfest_file = self.conf.getConf(self.conf.mfest_cache, self.allocator) catch |err| switch (err) {
         Conf.GetConfError.FileNotFound => null,
         else => {
             self.mfest_file = null;
-            log.warn("Couldn't open cached manifest file due to error: {s}.'", .{@errorName(err)});
+            log.warn("Couldn't open cached manifest file due to error: {t}.'", .{err});
             return;
         },
     };
@@ -192,7 +211,7 @@ pub fn loadLocalPrefixOverrides(self: *Manifest) LoadLocalPrefixOverridesError!v
     var iter: Conf.KeyValueIterator = .init(buf);
     while (iter.next()) |kv| {
         const pfix_id = std.fmt.parseInt(u32, kv.key, 16) catch |err| {
-            log.err("Couldn't parse prefix id from key \"{s}\" due to error: {s}.", .{ kv.key, @errorName(err) });
+            log.err("Couldn't parse prefix id from key \"{s}\" due to error: {t}.", .{ kv.key, err });
             return LoadLocalPrefixOverridesError.CannotParse;
         };
 
@@ -221,17 +240,17 @@ pub fn storeLocalPrefixOverrides(self: Manifest) StoreLocalPrefixOverridesError!
     }
 }
 
-fn getOverridePrefixIterator(self: Manifest) OridePrefixIterator {
-    const start_buf = self.mfest_file[@sizeOf(Timestamp)..];
+fn getOverridePrefixIterator(self: Manifest) LoadFromManifestFileError!OridePrefixIterator {
+    const start_buf = (self.mfest_file orelse return LoadFromManifestFileError.ManifestNotLoaded)[@sizeOf(i128) + @sizeOf(u32) ..];
     return .{
-        .elem_len = std.mem.bytesToValue(u32, start_buf[0..@sizeOf(u32)]),
+        .elem_len = std.mem.readInt(u32, start_buf[0..@sizeOf(u32)], .little),
         .section_start = start_buf[@sizeOf(u32)..],
     };
 }
 
 /// Returns a depleted `OridePrefixIterator` that can be used as a starting point for iterating the file records section.
-fn loadOverridablePrefixes(self: *Manifest) std.mem.Allocator.Error!OridePrefixIterator {
-    var iter = self.getOverridePrefixIterator();
+fn loadOverridablePrefixes(self: *Manifest) (std.mem.Allocator.Error || LoadFromManifestFileError)!OridePrefixIterator {
+    var iter = try self.getOverridePrefixIterator();
     while (iter.next()) |oride_pfix| {
         try self.oride_pfixes.put(oride_pfix.id, oride_pfix.prefix);
     }
@@ -239,28 +258,40 @@ fn loadOverridablePrefixes(self: *Manifest) std.mem.Allocator.Error!OridePrefixI
     return iter;
 }
 
+fn storeOverridablePrefixes(self: *Manifest, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    const count: u32 = @truncate(self.oride_pfixes.count());
+    try writer.writeInt(u32, count, .little);
+
+    var iter = self.oride_pfixes.iterator();
+    while (iter.next()) |kv| {
+        try writer.writeAll(kv.value_ptr.*);
+        try writer.writeInt(u8, 0, .little);
+        try writer.writeInt(u32, kv.key_ptr.*, .little);
+    }
+}
+
 /// Passing a depleted `OridePrefixIterator` helps find the start of the file records section quicker.
-fn getFileRecordIterator(self: Manifest, oride_pfix_iter: ?OridePrefixIterator) FileRecordIterator {
-    var local_iter = if (oride_pfix_iter != null) oride_pfix_iter.? else self.getOverridePrefixIterator();
+fn getFileRecordIterator(self: Manifest, oride_pfix_iter: ?OridePrefixIterator) LoadFromManifestFileError!FileRecordIterator {
+    var local_iter = if (oride_pfix_iter != null) oride_pfix_iter.? else try self.getOverridePrefixIterator();
     while (local_iter.next() != null) {}
 
     const section_len_start: usize = @intCast(local_iter.byte_idx);
 
     return .{
-        .elem_len = std.mem.bytesToValue(u64, local_iter.section_start[section_len_start .. section_len_start + @sizeOf(u64)]),
-        .section_start = local_iter.section_start[section_len_start + @sizeOf(u64)],
+        .elem_len = std.mem.readInt(u64, local_iter.section_start[section_len_start .. section_len_start + @sizeOf(u64)][0..@sizeOf(u64)], .little),
+        .section_start = local_iter.section_start[section_len_start + @sizeOf(u64) ..],
     };
 }
 
 /// Passing a depleted `OridePrefixIterator` helps find the start of the file records section quicker.
-fn loadFileRecords(self: *Manifest, oride_pfix_iter: ?OridePrefixIterator) std.mem.Allocator.Error!void {
-    var iter = self.getFileRecordIterator(oride_pfix_iter);
+fn loadFileRecords(self: *Manifest, oride_pfix_iter: ?OridePrefixIterator) (LoadFromManifestFileError || std.mem.Allocator.Error)!void {
+    var iter = try self.getFileRecordIterator(oride_pfix_iter);
     while (iter.next()) |file_record| {
         const local_fp: FileRecordKey = blk: {
             if (self.local_pfixes.get(file_record.pfix_id)) |local_pfix| {
                 if (self.oride_pfixes.get(file_record.pfix_id)) |oride_pfix| {
-                    if (std.mem.startsWith(u8, file_record.path, oride_pfix) and file_record.path.len > oride_pfix.len) {
-                        const repl_buf = try self.allocator.alloc(u8, local_pfix + file_record.path.len - oride_pfix);
+                    if (std.mem.startsWith(u8, file_record.path, oride_pfix)) {
+                        const repl_buf = try self.allocator.alloc(u8, local_pfix.len + file_record.path.len - oride_pfix.len);
 
                         std.mem.copyForwards(u8, repl_buf[0..local_pfix.len], local_pfix);
                         std.mem.copyForwards(u8, repl_buf[local_pfix.len..], file_record.path[oride_pfix.len..]);
@@ -284,4 +315,85 @@ fn loadFileRecords(self: *Manifest, oride_pfix_iter: ?OridePrefixIterator) std.m
 
         res.value_ptr.* = file_record;
     }
+}
+
+fn storeFileRecords(self: *Manifest, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    const count: u64 = @intCast(self.file_records.count());
+    try writer.writeInt(u64, count, .little);
+
+    for (self.file_records.values()) |val| {
+        try val.format(writer);
+    }
+}
+
+pub fn loadManifest(self: *Manifest) LoadManifestError!void {
+    self.oride_pfixes.clearRetainingCapacity();
+    self.file_records.clearRetainingCapacity();
+
+    self.sync_tstamp = try self.getSyncTimestamp();
+    const oride_pfix_iter = try self.loadOverridablePrefixes();
+    try self.loadFileRecords(oride_pfix_iter);
+}
+
+pub fn storeManifest(self: *Manifest, writer: *std.Io.Writer) StoreManifestError!void {
+    if (self.sync_tstamp == null)
+        return StoreManifestError.ManifestNotLoaded;
+
+    try self.sync_tstamp.?.format(writer);
+    try self.storeOverridablePrefixes(writer);
+    try self.storeFileRecords(writer);
+}
+
+test "manifest parsing" {
+    const allocator = std.testing.allocator;
+    const conf: Conf = .{ .vol = "test_vol" };
+    var manifest: Manifest = .init(conf, allocator);
+    defer manifest.deinit();
+
+    manifest.sync_tstamp = .{ .mod_dev_id = 5, .mod_time = 0 };
+    manifest.mfest_file = &.{};
+
+    try manifest.oride_pfixes.put(2, "foo/bar");
+    try manifest.oride_pfixes.put(1, "override/me");
+
+    try manifest.local_pfixes.put(1, try allocator.dupe(u8, "owo/owo"));
+
+    const rec1: FileRecord = .{
+        .blk_idx = 69,
+        .length = 98425,
+        .offset = 88,
+        .path = "foo/owo",
+        .pfix_id = 0,
+        .tstamp = .{
+            .mod_dev_id = 1,
+            .mod_time = 0,
+        },
+    };
+
+    const rec2: FileRecord = .{
+        .blk_idx = 77,
+        .length = 885822,
+        .offset = 122,
+        .path = "override/me",
+        .pfix_id = 1,
+        .tstamp = .{
+            .mod_dev_id = 2,
+            .mod_time = 0,
+        },
+    };
+
+    try manifest.file_records.put(.{ .key = "foo/owo", .owned = false }, rec1);
+
+    try manifest.file_records.put(.{ .key = "owo/owo", .owned = false }, rec2);
+
+    var writer: std.Io.Writer.Allocating = .init(allocator);
+    defer writer.deinit();
+
+    try manifest.storeManifest(&writer.writer);
+
+    manifest.mfest_file = try writer.toOwnedSlice();
+    try manifest.loadManifest();
+
+    try std.testing.expectEqualDeep(rec1, manifest.file_records.get(.{ .key = "foo/owo", .owned = false }).?);
+    try std.testing.expectEqualDeep(rec2, manifest.file_records.get(.{ .key = "owo/owo", .owned = false }).?);
 }
