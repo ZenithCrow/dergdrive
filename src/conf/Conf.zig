@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 
 const Conf = @This();
 
-const proj_name: []const u8 = "dergdrive";
+pub const proj_name: []const u8 = "dergdrive";
 
 pub const GetFileContentError = std.fs.File.StatError || std.mem.Allocator.Error || std.fs.File.ReadError;
 pub const GetFileContentFromPathError = GetFileContentError || std.fs.File.OpenError;

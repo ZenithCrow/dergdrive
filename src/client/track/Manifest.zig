@@ -1,11 +1,18 @@
 const std = @import("std");
 
+const Conf = @import("dergdrive").conf.Conf;
 const crypt = @import("dergdrive").crypt;
 
 const IncludeTree = @import("IncludeTree.zig");
 
+const StoreLocalPrefixOverridesError = Conf.OpenOrCreateConfFileError || std.fs.File.WriteError;
 const Manifest = @This();
 
+const log = std.log.scoped(.@"client/track/Manifest");
+
+const local_prefix_disclaimer: []const u8 = @embedFile("local-prefix-notice.txt");
+
+const LoadLocalPrefixOverridesError = error{CannotParse} || Conf.GetConfError || std.mem.Allocator.Error;
 const OridePrefixIterator = struct {
     section_start: []const u8,
     byte_idx: usize = 0,
@@ -92,22 +99,45 @@ const FileRecord = struct {
     }
 };
 
-const capacity_exp = 64;
+const FileRecordKey = struct {
+    key: []const u8,
+    owned: bool,
+};
 
-mfest_file: []const u8,
-sync_tstamp: Timestamp,
-//  TODO: let file_records key type know if the string was allocated in place
-file_records: std.StringHashMap(FileRecord),
-local_pfixes: std.AutoHashMap(u32, []const u8),
-oride_pfixes: std.AutoHashMap(u32, []const u8),
+const FileRecordContext = struct {
+    pub fn hash(_: @This(), c: FileRecordKey) u32 {
+        var key = c.key;
+
+        var h: std.hash.Fnv1a_32 = .init();
+
+        while (key.len >= 64) : (key = key[64..]) {
+            h.update(key[0..64]);
+        }
+
+        if (key.len > 0)
+            h.update(key);
+
+        return h.final();
+    }
+
+    pub fn eql(_: @This(), x: FileRecordKey, y: FileRecordKey, _: usize) bool {
+        return std.mem.eql(u8, x.key, y.key);
+    }
+};
+
+conf: Conf,
+// owned slice
+mfest_file: ?[]const u8 = null,
+is_local: bool = true,
+sync_tstamp: ?Timestamp = null,
+file_records: std.ArrayHashMap(FileRecordKey, FileRecord, FileRecordContext, true),
+local_pfixes: std.AutoArrayHashMap(u32, []const u8),
+oride_pfixes: std.AutoArrayHashMap(u32, []const u8),
 allocator: std.mem.Allocator,
 
-//  TODO: pass config location so that this module can load the prefix config
-pub fn init(allocator: std.mem.Allocator) Manifest {
+pub fn init(conf: Conf, allocator: std.mem.Allocator) Manifest {
     return .{
-        //  TODO: mfest_file is not available at the time of init, maybe make it nullable?
-        .mfest_file = undefined,
-        .sync_tstamp = undefined,
+        .conf = conf,
         .file_records = .init(allocator),
         .local_pfixes = .init(allocator),
         .oride_pfixes = .init(allocator),
@@ -115,11 +145,80 @@ pub fn init(allocator: std.mem.Allocator) Manifest {
     };
 }
 
-pub fn getSyncTimestamp(self: Manifest) Timestamp {
-    return .{
-        .mod_time = std.mem.bytesToValue(i128, self.mfest_file[0..@sizeOf(i128)]),
-        .mod_dev_id = std.mem.bytesToValue(u32, self.mfest_file[@sizeOf(i128)..@sizeOf(Timestamp)]),
+pub fn deinit(self: *Manifest) void {
+    if (self.mfest_file) |mfest| {
+        self.allocator.free(mfest);
+        self.mfest_file = null;
+    }
+
+    self.sync_tstamp = null;
+
+    for (self.file_records.keys()) |key| {
+        if (key.owned)
+            self.allocator.free(key.key);
+    }
+    self.file_records.deinit();
+
+    for (self.local_pfixes.values()) |value| {
+        self.allocator.free(value);
+    }
+    self.local_pfixes.deinit();
+
+    self.oride_pfixes.deinit();
+}
+
+pub fn getSyncTimestamp(self: Manifest) ?Timestamp {
+    return if (self.mfest_file) |mfest| .{
+        .mod_time = std.mem.bytesToValue(i128, mfest[0..@sizeOf(i128)]),
+        .mod_dev_id = std.mem.bytesToValue(u32, mfest[@sizeOf(i128)..@sizeOf(Timestamp)]),
+    } else null;
+}
+
+pub fn loadCachedManifest(self: *Manifest) void {
+    self.mfest_file = self.conf.getConf(self.conf.mfest_cache, self.allocator) catch |err| switch (err) {
+        Conf.GetConfError.FileNotFound => null,
+        else => {
+            self.mfest_file = null;
+            log.warn("Couldn't open cached manifest file due to error: {s}.'", .{@errorName(err)});
+            return;
+        },
     };
+}
+
+pub fn loadLocalPrefixOverrides(self: *Manifest) LoadLocalPrefixOverridesError!void {
+    const buf = try self.conf.getConf(self.conf.oride_prefixes, self.allocator);
+    defer self.allocator.free(buf);
+
+    var iter: Conf.KeyValueIterator = .init(buf);
+    while (iter.next()) |kv| {
+        const pfix_id = std.fmt.parseInt(u32, kv.key, 16) catch |err| {
+            log.err("Couldn't parse prefix id from key \"{s}\" due to error: {s}.", .{ kv.key, @errorName(err) });
+            return LoadLocalPrefixOverridesError.CannotParse;
+        };
+
+        if (kv.value.len > 0)
+            try self.local_pfixes.put(pfix_id, try self.allocator.dupe(u8, kv.value));
+    }
+}
+
+test "format id to hex" {
+    try std.testing.expectFmt("0000001f", "{x:0>8}", .{0x1f});
+    try std.testing.expectFmt("0f0f00af", "{x:0>8}", .{0xf0f00af});
+}
+
+pub fn storeLocalPrefixOverrides(self: Manifest) StoreLocalPrefixOverridesError!void {
+    const file = try self.conf.openOrCreateConfFile(self.conf.oride_prefixes, true, self.allocator);
+    var w_buf: [512]u8 = undefined;
+    var writer = file.writer(&w_buf);
+
+    writer.interface.print(local_prefix_disclaimer, .{Conf.proj_name}) catch return writer.err.?;
+
+    var iter = self.oride_pfixes.iterator();
+    while (iter.next()) |kv| {
+        const oride_val = self.local_pfixes.get(kv.key_ptr.*) orelse "";
+        writer.interface.print("# {s}\n", .{kv.value_ptr.*}) catch return writer.err.?;
+        writer.interface.print("{x:0>8}={s}\n\n", .{ kv.key_ptr.*, oride_val }) catch return writer.err.?;
+    }
 }
 
 fn getOverridePrefixIterator(self: Manifest) OridePrefixIterator {
@@ -157,7 +256,7 @@ fn getFileRecordIterator(self: Manifest, oride_pfix_iter: ?OridePrefixIterator) 
 fn loadFileRecords(self: *Manifest, oride_pfix_iter: ?OridePrefixIterator) std.mem.Allocator.Error!void {
     var iter = self.getFileRecordIterator(oride_pfix_iter);
     while (iter.next()) |file_record| {
-        const local_fp = blk: {
+        const local_fp: FileRecordKey = blk: {
             if (self.local_pfixes.get(file_record.pfix_id)) |local_pfix| {
                 if (self.oride_pfixes.get(file_record.pfix_id)) |oride_pfix| {
                     if (std.mem.startsWith(u8, file_record.path, oride_pfix) and file_record.path.len > oride_pfix.len) {
@@ -166,22 +265,21 @@ fn loadFileRecords(self: *Manifest, oride_pfix_iter: ?OridePrefixIterator) std.m
                         std.mem.copyForwards(u8, repl_buf[0..local_pfix.len], local_pfix);
                         std.mem.copyForwards(u8, repl_buf[local_pfix.len..], file_record.path[oride_pfix.len..]);
 
-                        break :blk repl_buf;
+                        break :blk .{ .key = repl_buf, .owned = true };
                     }
 
-                    //  TODO: warn about overridable prefix not being a prefix of the file path
+                    log.warn("Prefix \"{s}\" is not applicable to filepath \"{s}\". Using provided filepath instead of the prefix.", .{ oride_pfix, file_record.path });
                 } else if (file_record.pfix_id != 0) {
-                    //  TODO: warn about non-existent overridable prefix
+                    log.warn("No such prefix exists with id {d}.", .{file_record.pfix_id});
                 }
             }
 
-            //  TODO: don't dupe here if the key structure knows which keys are owned
-            break :blk try self.allocator.dupe(u8, file_record.path);
+            break :blk .{ .key = file_record.path, .owned = false };
         };
 
         const res = try self.file_records.getOrPut(local_fp);
         if (res.found_existing) {
-            //  TODO: warn about overriding an existing file record
+            log.warn("Duplicate file record \"{s}\". Overwriting existing file record.", .{file_record.path});
         }
 
         res.value_ptr.* = file_record;

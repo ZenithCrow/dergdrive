@@ -6,7 +6,7 @@ const Env = @This();
 
 pub const StoreEnvsError = std.mem.Allocator.Error || Conf.OpenOrCreateConfFileError || std.fs.File.WriteError;
 
-const log = std.log.scoped(.@"conf/env");
+const log = std.log.scoped(.@"conf/Env");
 
 pub const EnvValue = struct {
     val: []const u8,
@@ -82,7 +82,7 @@ pub fn loadEnvs(self: *Env) std.mem.Allocator.Error!void {
             Conf.GetConfError.OutOfMemory => return Conf.GetConfError.OutOfMemory,
             Conf.GetConfError.FileNotFound => continue,
             else => {
-                log.warn("config file {f} could not be opened: {s}", .{ env_conf_file, @errorName(err) });
+                log.warn("Config file {f} could not be opened due to error: {s}.", .{ env_conf_file, @errorName(err) });
                 continue;
             },
         });

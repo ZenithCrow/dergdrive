@@ -1,0 +1,20 @@
+# This config file is generated and processed by {s} and is inteded to be edited directly.
+# Here you can configure path prefixes to be locally overridden, so that, for instance, a directory could be placed in a location different from the common location.
+# 
+# # foo/owo <- prefix at origin
+# 05fc4a7b=bar/owo
+#     ^\     ^- overrididing prefix
+#       \- assigned prefix id (do not edit this)
+#
+# When a file with path prefix override is synced, it will be placed into location specified by the overrididing prefix.
+# In this example, file "foo/owo" at the origin will be located at "bar/owo" on this machine. 
+# If "foo/owo" were a directory, every file in that directory will have this prefix in its path overridden. 
+# That means "foo/owo/bzz/text.txt" at the origin will be located at "bar/owo/bzz/text.txt"
+#
+# If you want to add a new prefix override, manually add a line in this format:
+#
+# prefix/at/origin=local/override
+#
+# and it will be assigned a prefix id upon the next sync.
+#
+
