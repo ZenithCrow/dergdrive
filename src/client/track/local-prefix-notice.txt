@@ -17,4 +17,10 @@
 #
 # and it will be assigned a prefix id upon the next sync.
 #
-
+# If the prefix at origin happens to be the exact same format as the previously mentioned prefix id, add a '/' at the end.
+# In this example: 
+#
+# 05fc4a7b/=bar/owo
+#
+# The key that would be treated as an existing prefix id will be instead treated as path and will be assigned a prefix id upon the next sync.
+#

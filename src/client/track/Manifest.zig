@@ -12,8 +12,9 @@ const log = std.log.scoped(.@"client/track/Manifest");
 
 const local_prefix_disclaimer: []const u8 = @embedFile("local-prefix-notice.txt");
 
-const LoadLocalPrefixOverridesError = error{CannotParse} || Conf.GetConfError || std.mem.Allocator.Error;
-const LoadFromManifestFileError = error{ManifestNotLoaded};
+const LoadLocalPrefixOverridesError = Conf.GetConfError || std.mem.Allocator.Error;
+const GetSyncTimestampFromCachedManifestError = Conf.OpenOrCreateConfFileError || std.fs.File.ReadError || LoadFromManifestFileError;
+const LoadFromManifestFileError = error{ NotLoaded, Illformed };
 const LoadManifestError = LoadFromManifestFileError || std.mem.Allocator.Error;
 const StoreManifestError = LoadFromManifestFileError || std.Io.Writer.Error;
 const OridePrefixIterator = struct {
@@ -144,14 +145,19 @@ const FileRecordContext = struct {
     }
 };
 
+const UnassignedPrefix = struct {
+    key: []const u8,
+    val: []const u8,
+};
+
 conf: Conf,
-// owned slice
 mfest_file: ?[]const u8 = null,
 is_local: bool = true,
 sync_tstamp: ?Timestamp = null,
 file_records: std.ArrayHashMap(FileRecordKey, FileRecord, FileRecordContext, true),
 local_pfixes: std.AutoArrayHashMap(u32, []const u8),
 oride_pfixes: std.AutoArrayHashMap(u32, []const u8),
+unassigned_pfixes: std.array_list.Managed(UnassignedPrefix),
 allocator: std.mem.Allocator,
 
 pub fn init(conf: Conf, allocator: std.mem.Allocator) Manifest {
@@ -160,16 +166,13 @@ pub fn init(conf: Conf, allocator: std.mem.Allocator) Manifest {
         .file_records = .init(allocator),
         .local_pfixes = .init(allocator),
         .oride_pfixes = .init(allocator),
+        .unassigned_pfixes = .init(allocator),
         .allocator = allocator,
     };
 }
 
 pub fn deinit(self: *Manifest) void {
-    if (self.mfest_file) |mfest| {
-        self.allocator.free(mfest);
-        self.mfest_file = null;
-    }
-
+    self.mfest_file = null;
     self.sync_tstamp = null;
 
     for (self.file_records.keys()) |key| {
@@ -184,22 +187,45 @@ pub fn deinit(self: *Manifest) void {
     self.local_pfixes.deinit();
 
     self.oride_pfixes.deinit();
+
+    for (self.unassigned_pfixes.items) |pf| {
+        self.allocator.free(pf.key);
+        self.allocator.free(pf.val);
+    }
+    self.unassigned_pfixes.deinit();
 }
 
 pub fn getSyncTimestamp(self: Manifest) LoadFromManifestFileError!Timestamp {
-    return if (self.mfest_file) |mfest| .{
+    return if (self.mfest_file) |mfest| if (mfest.len < @sizeOf(i128) + @sizeOf(u32)) LoadFromManifestFileError.Illformed else .{
         .mod_time = std.mem.readInt(i128, mfest[0..@sizeOf(i128)], .little),
         .mod_dev_id = std.mem.readInt(u32, mfest[@sizeOf(i128) .. @sizeOf(i128) + @sizeOf(u32)], .little),
-    } else LoadFromManifestFileError.ManifestNotLoaded;
+    } else LoadFromManifestFileError.NotLoaded;
 }
 
-pub fn openCachedManifest(self: *Manifest) void {
+pub fn getSyncTimestampFromCachedManifest(self: Manifest) GetSyncTimestampFromCachedManifestError!?Timestamp {
+    const file = self.conf.openOrCreateConfFile(self.conf.mfest_cache, false, self.allocator) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+
+    var buf: [@sizeOf(i128) + @sizeOf(u32)]u8 = undefined;
+    var reader = file.reader(&.{});
+    reader.interface.readSliceAll(&buf) catch |err| switch (err) {
+        error.EndOfStream => {},
+        error.ReadFailed => return reader.err.?,
+    };
+
+    var self_cpy = self;
+    self_cpy.mfest_file = &buf;
+    return self_cpy.getSyncTimestamp() catch unreachable;
+}
+
+pub fn openCachedManifest(self: *Manifest) Conf.GetConfError!void {
     self.mfest_file = self.conf.getConf(self.conf.mfest_cache, self.allocator) catch |err| switch (err) {
         Conf.GetConfError.FileNotFound => null,
         else => {
             self.mfest_file = null;
-            log.warn("Couldn't open cached manifest file due to error: {t}.'", .{err});
-            return;
+            return err;
         },
     };
 }
@@ -210,13 +236,24 @@ pub fn loadLocalPrefixOverrides(self: *Manifest) LoadLocalPrefixOverridesError!v
 
     var iter: Conf.KeyValueIterator = .init(buf);
     while (iter.next()) |kv| {
-        const pfix_id = std.fmt.parseInt(u32, kv.key, 16) catch |err| {
-            log.err("Couldn't parse prefix id from key \"{s}\" due to error: {t}.", .{ kv.key, err });
-            return LoadLocalPrefixOverridesError.CannotParse;
+        if (kv.key.len == 0) {
+            log.warn("Couldn't parse prefix from empty key", .{});
+            continue;
+        }
+
+        const pfix_id = std.fmt.parseInt(u32, kv.key, 16) catch {
+            const pfix = if (kv.key[kv.key.len - 1] == '/') kv.key[0 .. kv.key.len - 1] else kv.key;
+            try self.unassigned_pfixes.append(.{ .key = try self.allocator.dupe(u8, pfix), .val = try self.allocator.dupe(u8, kv.value) });
+            continue;
         };
 
-        if (kv.value.len > 0)
-            try self.local_pfixes.put(pfix_id, try self.allocator.dupe(u8, kv.value));
+        const res = try self.local_pfixes.getOrPut(pfix_id);
+        if (res.found_existing) {
+            log.warn("Duplicate prefix override id {d}. Overwriting value \"{s}\" with \"{s}\".", .{ res.key_ptr.*, res.value_ptr.*, kv.value });
+            self.allocator.free(res.value_ptr.*);
+        }
+
+        res.value_ptr.* = try self.allocator.dupe(u8, kv.value);
     }
 }
 
@@ -241,7 +278,11 @@ pub fn storeLocalPrefixOverrides(self: Manifest) StoreLocalPrefixOverridesError!
 }
 
 fn getOverridePrefixIterator(self: Manifest) LoadFromManifestFileError!OridePrefixIterator {
-    const start_buf = (self.mfest_file orelse return LoadFromManifestFileError.ManifestNotLoaded)[@sizeOf(i128) + @sizeOf(u32) ..];
+    const mfest = self.mfest_file orelse return LoadFromManifestFileError.NotLoaded;
+    if (mfest.len < @sizeOf(i128) + @sizeOf(u32))
+        return LoadFromManifestFileError.Illformed;
+
+    const start_buf = mfest[@sizeOf(i128) + @sizeOf(u32) ..];
     return .{
         .elem_len = std.mem.readInt(u32, start_buf[0..@sizeOf(u32)], .little),
         .section_start = start_buf[@sizeOf(u32)..],
@@ -275,7 +316,7 @@ fn getFileRecordIterator(self: Manifest, oride_pfix_iter: ?OridePrefixIterator) 
     var local_iter = if (oride_pfix_iter != null) oride_pfix_iter.? else try self.getOverridePrefixIterator();
     while (local_iter.next() != null) {}
 
-    const section_len_start: usize = @intCast(local_iter.byte_idx);
+    const section_len_start = local_iter.byte_idx;
 
     return .{
         .elem_len = std.mem.readInt(u64, local_iter.section_start[section_len_start .. section_len_start + @sizeOf(u64)][0..@sizeOf(u64)], .little),
@@ -309,9 +350,8 @@ fn loadFileRecords(self: *Manifest, oride_pfix_iter: ?OridePrefixIterator) (Load
         };
 
         const res = try self.file_records.getOrPut(local_fp);
-        if (res.found_existing) {
+        if (res.found_existing)
             log.warn("Duplicate file record \"{s}\". Overwriting existing file record.", .{file_record.path});
-        }
 
         res.value_ptr.* = file_record;
     }
@@ -329,15 +369,31 @@ fn storeFileRecords(self: *Manifest, writer: *std.Io.Writer) std.Io.Writer.Error
 pub fn loadManifest(self: *Manifest) LoadManifestError!void {
     self.oride_pfixes.clearRetainingCapacity();
     self.file_records.clearRetainingCapacity();
+    self.unassigned_pfixes.clearRetainingCapacity();
 
     self.sync_tstamp = try self.getSyncTimestamp();
     const oride_pfix_iter = try self.loadOverridablePrefixes();
+
+    var lowest_idx: u32 = 1;
+    for (self.unassigned_pfixes.items) |pair| {
+        while (self.oride_pfixes.get(lowest_idx) != null) {
+            lowest_idx += 1;
+        }
+
+        try self.oride_pfixes.putNoClobber(lowest_idx, pair.key);
+        const res = try self.local_pfixes.getOrPut(lowest_idx);
+        if (res.found_existing)
+            log.warn("Duplicate prefix override \"{s}\". Overwriting value \"{s}\" with \"{s}\".", .{ pair.key, res.value_ptr.*, pair.val });
+
+        res.value_ptr.* = pair.val;
+    }
+
     try self.loadFileRecords(oride_pfix_iter);
 }
 
 pub fn storeManifest(self: *Manifest, writer: *std.Io.Writer) StoreManifestError!void {
     if (self.sync_tstamp == null)
-        return StoreManifestError.ManifestNotLoaded;
+        return StoreManifestError.NotLoaded;
 
     try self.sync_tstamp.?.format(writer);
     try self.storeOverridablePrefixes(writer);
@@ -391,7 +447,7 @@ test "manifest parsing" {
 
     try manifest.storeManifest(&writer.writer);
 
-    manifest.mfest_file = try writer.toOwnedSlice();
+    manifest.mfest_file = writer.written();
     try manifest.loadManifest();
 
     try std.testing.expectEqualDeep(rec1, manifest.file_records.get(.{ .key = "foo/owo", .owned = false }).?);
