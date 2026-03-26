@@ -1,9 +1,10 @@
 const std = @import("std");
-const header = @import("header.zig");
-const SyncMessage = @import("SyncMessage.zig");
-const RequestChunk = @import("RequestChunk.zig");
-const PayloadChunk = @import("PayloadChunk.zig");
+
 const DestChunk = @import("DestChunk.zig");
+const header = @import("header.zig");
+const PayloadChunk = @import("PayloadChunk.zig");
+const RequestChunk = @import("RequestChunk.zig");
+const SyncMessage = @import("SyncMessage.zig");
 
 pub const Iterator = struct {
     buffer: []u8,
@@ -59,7 +60,7 @@ data: []u8,
 
 /// the total size of the chunk including header and data
 pub inline fn getWrittenSize(self: Chunk) header.DataLenT {
-    return @as(header.DataLenT, header.header_size + self.data.len);
+    return @as(header.DataLenT, @intCast(header.header_size + self.data.len));
 }
 
 pub inline fn updateSizeHeader(self: Chunk) void {
@@ -82,7 +83,7 @@ pub fn readChunk(buffer: []u8) ReadError!Chunk {
 }
 
 pub fn createChunk(comptime ChunkT: type, buf: []u8) CreateError!ChunkT {
-    // TODO validation of ChunkT
+    //  TODO: validation of ChunkT
 
     // switch (@typeInfo(ChunkT)) {
     //     .@"struct" => |struc| {

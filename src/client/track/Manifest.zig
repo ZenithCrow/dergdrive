@@ -1,9 +1,9 @@
 const std = @import("std");
 
+const IncludeTree = @import("IncludeTree.zig");
+
 const Conf = @import("dergdrive").conf.Conf;
 const crypt = @import("dergdrive").crypt;
-
-const IncludeTree = @import("IncludeTree.zig");
 
 const StoreLocalPrefixOverridesError = Conf.OpenOrCreateConfFileError || std.fs.File.WriteError;
 const Manifest = @This();
@@ -122,6 +122,13 @@ const FileRecord = struct {
 const FileRecordKey = struct {
     key: []const u8,
     owned: bool,
+
+    pub fn borrowed(key: []const u8) FileRecordKey {
+        return .{
+            .key = key,
+            .owned = false,
+        };
+    }
 };
 
 const FileRecordContext = struct {
@@ -150,11 +157,13 @@ const UnassignedPrefix = struct {
     val: []const u8,
 };
 
+pub const FileRecords = std.ArrayHashMap(FileRecordKey, FileRecord, FileRecordContext, true);
+
 conf: Conf,
 mfest_file: ?[]const u8 = null,
 is_local: bool = true,
 sync_tstamp: ?Timestamp = null,
-file_records: std.ArrayHashMap(FileRecordKey, FileRecord, FileRecordContext, true),
+file_records: FileRecords,
 local_pfixes: std.AutoArrayHashMap(u32, []const u8),
 oride_pfixes: std.AutoArrayHashMap(u32, []const u8),
 unassigned_pfixes: std.array_list.Managed(UnassignedPrefix),

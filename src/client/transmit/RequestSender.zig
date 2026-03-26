@@ -1,12 +1,14 @@
 const std = @import("std");
-const pipe_adapter = @import("pipe_adapter.zig");
-const RequestChunkBuffer = @import("RequestChunkBuffer.zig");
-const sync = @import("dergdrive").proto.sync;
-const TcpClient = @import("znetw").TcpClient;
-const Cryptor = @import("Cryptor.zig");
-const AtomicBool = std.atomic.Value(bool);
 const Thread = std.Thread;
 
+const sync = @import("dergdrive").proto.sync;
+const TcpClient = @import("znetw").TcpClient;
+
+const Cryptor = @import("Cryptor.zig");
+const pipe_adapter = @import("pipe_adapter.zig");
+const RequestChunkBuffer = @import("RequestChunkBuffer.zig");
+
+const AtomicBool = std.atomic.Value(bool);
 const RequestSender = @This();
 
 tcp_cli: *TcpClient,
@@ -102,7 +104,7 @@ fn sendLoop(self: *RequestSender) void {
         defer self.finishReadBuf(req_buf);
 
         self.tcp_cli.sendAll(req_buf) catch {
-            // TODO handle error
+            //  TODO: handle error
             std.log.err("sending file failed", .{});
         };
     }

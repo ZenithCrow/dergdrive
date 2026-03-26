@@ -1,40 +1,90 @@
 const std = @import("std");
-const IncludeTree = @import("dergdrive").client.track.IncludeTree;
-const pipe_adapter = @import("pipe_adapter.zig");
 const File = std.fs.File;
+const Dir = std.fs.Dir;
+
+const sync = @import("dergdrive").proto.sync;
+const track = @import("dergdrive").client.track;
+const IncludeTree = track.IncludeTree;
+const SyncOp = track.SyncOp;
+const Manifest = track.Manifest;
+
+const pipe_adapter = @import("pipe_adapter.zig");
 const RawFileChunkBuffer = @import("RawFileChunkBuffer.zig");
+const RequestStorage = @import("RequestStorage.zig");
 
 const FileReader = @This();
 
-incl_tree: IncludeTree,
 raw_file_adapter: *pipe_adapter.RawFilePipeAdapter,
+req_stor: *RequestStorage,
 
-const PipeFileError = File.GetEndPosError || std.Io.Reader.ShortError;
+pub const PipeFileError = File.GetEndPosError || File.ReadError;
+pub const SyncFileError = error{};
+pub const SyncDirError = error{};
 
-fn pipeFile(self: *FileReader, file: File) PipeFileError!void {
+fn pipeFile(self: *FileReader, file: File, req_id: sync.RequestChunk.IdT) PipeFileError!void {
     var piped_size: usize = 0;
     const file_size = try file.getEndPos();
     var reader = file.reader(&.{});
 
-    while (piped_size < file_size) {
-        const chunk_buf: *RawFileChunkBuffer = self.raw_file_adapter.claimChunkBuf(.write);
-        defer self.raw_file_adapter.unclaimChunkBuf(chunk_buf, .write);
+    const req = self.req_stor.pending_reqs.getPtr(req_id).?;
+    switch (req.req_type) {
+        .file_new => req.req.file_new.length.writeFileNewRequest(file_size),
+        else => {},
+    }
 
-        const write_buf = chunk_buf.chunk_buf.getBuf();
+    while (piped_size < file_size) {
+        const rf_chunk_buf: *RawFileChunkBuffer = self.raw_file_adapter.claimChunkBuf(.write);
+        defer self.raw_file_adapter.unclaimChunkBuf(rf_chunk_buf, .write);
+
+        rf_chunk_buf.req_id = req_id;
+
+        const write_buf = rf_chunk_buf.chunk_buf.getBuf();
 
         const bytes_read = reader.interface.readSliceShort(write_buf) catch {
-            // TODO handle specific error
-            // possibly send a cancel upload request for this file, so that partial uploads do not occur
-            return PipeFileError.ReadFailed;
+            //  TODO: handle specific error
+            //  TODO: possibly send a cancel upload request for this file, so that partial uploads do not occur
+            return reader.err.?;
         };
 
         {
-            chunk_buf.chunk_buf.w_lock.lock();
-            defer chunk_buf.chunk_buf.w_lock.unlock();
+            rf_chunk_buf.chunk_buf.w_lock.lock();
+            defer rf_chunk_buf.chunk_buf.w_lock.unlock();
 
-            chunk_buf.chunk_buf.data_len = bytes_read;
+            rf_chunk_buf.chunk_buf.data_len = bytes_read;
         }
 
         piped_size += bytes_read;
     }
 }
+
+pub fn syncFile(self: *FileReader, subpath: []const u8, file: ?File, sync_op: SyncOp, mfest_records: Manifest.FileRecords) SyncFileError!void {
+    const file_record = mfest_records.get(.borrowed(subpath));
+    if (file == null) {
+        if (file_record) |fr| {
+            _ = fr;
+            switch (sync_op.push.deleted << 1 | sync_op.pull.new) {
+                0b00 => return error.NoPushDeletedPullNew,
+                0b01 => {
+                    //  TODO: pull file
+                },
+                0b10 => {
+                    //  TODO: delete file on server
+                },
+                0b11 => return error.IllegalCombination,
+            }
+        } else return error.NoOp;
+    } else if (file_record == null) {
+        switch (sync_op.push.new << 1 | sync_op.pull.deleted) {
+            0b00 => return error.NoPushNewPullDeleted,
+            0b01 => {
+                //  TODO: delele local file
+            },
+            0b10 => {
+                try self.pipeFile(file.?, self.req_stor.newPushFileNew());
+            },
+            0b11 => return error.IllegalCombination,
+        }
+    }
+}
+
+//pub fn syncDir(self: *FileReader, subpath: []const u8, dir: Dir, sync_op: SyncOp) SyncDirError!void {}

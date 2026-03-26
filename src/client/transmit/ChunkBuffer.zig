@@ -21,6 +21,10 @@ pub inline fn getBuf(self: *ChunkBuffer) []u8 {
     return self.back_buf[0..self.buf_len];
 }
 
+pub inline fn getWrittenBuf(self: *ChunkBuffer) []const u8 {
+    return self.back_buf[0..self.data_len];
+}
+
 pub fn waitUntilState(self: *ChunkBuffer, empty: EmptyState) void {
     self.w_lock.lock();
     defer self.w_lock.unlock();

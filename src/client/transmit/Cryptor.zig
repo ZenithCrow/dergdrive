@@ -8,6 +8,7 @@ const sync = @import("dergdrive").proto.sync;
 const pipe_adapter = @import("pipe_adapter.zig");
 const RawFileChunkBuffer = @import("RawFileChunkBuffer.zig");
 const RequestChunkBuffer = @import("RequestChunkBuffer.zig");
+const RequestStorage = @import("RequestStorage.zig");
 
 const AtomicBool = std.atomic.Value(bool);
 
@@ -22,15 +23,16 @@ pub const CryptorCluster = struct {
     key: [crypt.key_length]u8,
     raw_file_pa: ?*pipe_adapter.RawFilePipeAdapter = null,
     request_pa: ?*pipe_adapter.RequestPipeAdapter = null,
+    request_storage: *RequestStorage,
     cryptors: [num_cryptors]Cryptor = undefined,
     th_pool: std.Thread.Pool = undefined,
     allocator: std.mem.Allocator,
 
-    pub fn init(self: *@This(), id_supply: *sync.RequestChunk.IdSupplier) void {
+    pub fn init(self: *CryptorCluster) void {
         for (&self.cryptors) |*cryptor| {
             cryptor.* = .{
                 .raw_file_cbuf = .{},
-                .request_cbuf = .init(id_supply),
+                .request_cbuf = .{},
                 .cluster = self,
             };
 
@@ -84,8 +86,22 @@ pub fn pipeEncrypted(self: *Cryptor) !void {
         self.raw_file_cbuf.chunk_buf.waitUntilState(.full);
         self.request_cbuf.chunk_buf.waitUntilState(.empty);
 
-        const in_buf = self.raw_file_cbuf.chunk_buf.getBuf()[0..self.raw_file_cbuf.chunk_buf.data_len];
-        const out_buf_all = self.request_cbuf.trns_msg.newMsg(in_buf + crypt.nonce_auth_len, self.raw_file_cbuf.request.request_type) catch unreachable;
+        const req = self.cluster.request_storage.pending_reqs.getPtr(self.raw_file_cbuf.req_id.?).?;
+
+        const in_buf = self.raw_file_cbuf.chunk_buf.getWrittenBuf();
+        const out_buf_all = self.request_cbuf.trns_msg.newMsg(
+            in_buf + crypt.nonce_auth_len,
+            self.raw_file_cbuf.request.request_type,
+            req.id,
+        ) catch unreachable;
+
+        self.request_cbuf.req_id = self.raw_file_cbuf.req_id;
+        self.request_cbuf.trns_msg.dest_chunk.copyValues(switch (req.req_type) {
+            .file_post => req.req.file_post,
+            .file_new => req.req.file_new,
+        });
+        self.request_cbuf.trns_msg.dest_chunk.write();
+
         var auth_tag: [crypt.AesAlgo.tag_length]u8 = undefined;
         var nonce: [crypt.AesAlgo.nonce_length]u8 = undefined;
         std.crypto.random.bytes(&nonce);
@@ -96,6 +112,8 @@ pub fn pipeEncrypted(self: *Cryptor) !void {
         crypt.AesAlgo.encrypt(out_buf, &auth_tag, in_buf, &nonce, &nonce, &self.cluster.key);
         std.mem.copyForwards(u8, out_buf_all[0..crypt.AesAlgo.tag_length], &auth_tag);
 
+        self.raw_file_cbuf.req_id = null;
+
         self.cluster.raw_file_pa.?.signalCryptorAvailable(self);
         self.cluster.request_pa.?.signalCryptorAvailable(self);
     }
@@ -103,19 +121,19 @@ pub fn pipeEncrypted(self: *Cryptor) !void {
 
 pub fn pipeDecrypted(self: *Cryptor) !void {
     while (self.running.load(.acquire)) {
-        // TODO rework this entirely once networking is in place
+        //  TODO: rework this entirely once networking is in place
         self.request_cbuf.chunk_buf.waitUntilState(.full);
         self.raw_file_cbuf.chunk_buf.waitUntilState(.empty);
 
-        // TODO forward request
-        var in_buf = &[_]u8{}; // TODO get network enc content buffer here
+        //  TODO: forward request
+        var in_buf = &[_]u8{}; //  TODO: get network enc content buffer here
         const auth_tag = in_buf[0..crypt.AesAlgo.tag_length];
         const nonce = in_buf[crypt.AesAlgo.tag_length..crypt.nonce_auth_len];
         in_buf = in_buf[crypt.nonce_auth_len..];
 
         const out_buf = self.raw_file_cbuf.back_buf[0..in_buf.len];
 
-        // TODO report integrity violation
+        //  TODO: report integrity violation
         crypt.AesAlgo.decrypt(out_buf, in_buf, auth_tag, nonce, nonce, &self.cluster.key) catch continue;
 
         {

@@ -1,9 +1,10 @@
 const std = @import("std");
+
 const sync = @import("dergdrive").proto.sync;
+pub const InitError = sync.Chunk.CreateError;
 
 const TransmitFileMsg = @This();
 
-pub const InitError = sync.Chunk.CreateError;
 pub const NewMsgError = error{
     InsufficientBufferSpace,
     UnsupportedRequestType,
@@ -12,15 +13,13 @@ pub const NewMsgError = error{
 pub const non_payload_size = sync.header.header_size * 4 + sync.RequestChunk.content_size + sync.DestChunk.content_size;
 
 msg_container: sync.SyncMessage,
-id_supply: *sync.RequestChunk.IdSupplier,
 rq_chunk: sync.RequestChunk,
 dest_chunk: sync.DestChunk,
 pld_chunk: sync.PayloadChunk,
 
-pub fn init(buf: []u8, id_supply: *sync.RequestChunk.IdSupplier) InitError!TransmitFileMsg {
+pub fn init(buf: []u8) InitError!TransmitFileMsg {
     var tfm: TransmitFileMsg = .{
         .msg_container = .{ .msg_buf = buf },
-        .id_supply = id_supply,
         .rq_chunk = undefined,
         .dest_chunk = undefined,
         .pld_chunk = undefined,
@@ -41,11 +40,11 @@ pub fn init(buf: []u8, id_supply: *sync.RequestChunk.IdSupplier) InitError!Trans
     return tfm;
 }
 
-pub fn newMsg(self: *TransmitFileMsg, payload_size: u32, req_type: sync.RequestChunk.RequestType) NewMsgError![]u8 {
+pub fn newMsg(self: *TransmitFileMsg, payload_size: u32, req_type: sync.RequestChunk.RequestType, id: sync.RequestChunk.IdT) NewMsgError![]u8 {
     if (non_payload_size + payload_size > self.msg_container.msg_buf.len)
         return NewMsgError.InsufficientBufferSpace;
 
-    self.rq_chunk.id = self.id_supply.takeId();
+    self.rq_chunk.id = id;
     self.rq_chunk.request_type = switch (req_type) {
         .file_post, .file_new => req_type,
         else => return NewMsgError.UnsupportedRequestType,
@@ -63,19 +62,17 @@ pub fn newMsg(self: *TransmitFileMsg, payload_size: u32, req_type: sync.RequestC
 
 test "non-payload size matches" {
     var buf: [TransmitFileMsg.non_payload_size + 1024]u8 = undefined;
-    var id_supply = sync.RequestChunk.IdSupplier{};
 
-    const tfm: TransmitFileMsg = try .init(&buf, &id_supply);
+    const tfm: TransmitFileMsg = try .init(&buf);
     try std.testing.expectEqual(non_payload_size, try tfm.msg_container.getWrittenSize());
 }
 
 test "newMsg payload size matches" {
     const payload_size = 1024;
     var buf: [TransmitFileMsg.non_payload_size + payload_size + 1024]u8 = undefined;
-    var id_supply = sync.RequestChunk.IdSupplier{};
 
-    var tfm: TransmitFileMsg = try .init(&buf, &id_supply);
-    const pld_buf = try tfm.newMsg(payload_size, .file_post);
+    var tfm: TransmitFileMsg = try .init(&buf);
+    const pld_buf = try tfm.newMsg(payload_size, .file_post, 0);
     try std.testing.expectEqual(payload_size, pld_buf.len);
     try std.testing.expectEqual(payload_size + TransmitFileMsg.non_payload_size, try tfm.msg_container.getWrittenSize());
 }

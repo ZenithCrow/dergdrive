@@ -109,19 +109,28 @@ const MatchIterator = struct {
 };
 
 const TreeIterator = struct {
+    include_all: bool = false,
     tree: IncludeTree,
     index: usize = 0,
     level_stack: std.ArrayList(LevelledNodesIterator) = .empty,
+    excluded_files: std.hash_map.StringHashMapUnmanaged(usize) = .empty,
     level: usize = 1,
     allocator: std.mem.Allocator,
 
     pub const LevelledNodesIterator = struct {
         flat_tree: []const TreeNode,
         index: usize = 0,
+        flat_breadth: ?usize = null,
+        node_idx: usize = 0,
 
         pub fn next(self: *LevelledNodesIterator) ?TreeNode {
             if (self.index >= self.flat_tree.len)
                 return null;
+
+            if (self.flat_breadth) |fb| {
+                if (self.node_idx >= fb)
+                    return null;
+            }
 
             const node = self.flat_tree[self.index];
             self.index += switch (node) {
@@ -129,12 +138,54 @@ const TreeIterator = struct {
                 .dir => |dir_node| dir_node.flat_breadth + 1,
             };
 
+            self.node_idx += 1;
+
             return node;
         }
     };
 
+    pub fn init(self: *TreeIterator) std.mem.Allocator.Error!void {
+        var node: ?TreeNode = null;
+        var level: ?usize = null;
+
+        while (level) |lev| : (level = try self.nextNodeLevel(&node)) {
+            if (levelIsIgnore(lev)) {
+                try self.excluded_files.putNoClobber(self.allocator, switch (node.?) {
+                    .file => |path| path,
+                    .dir => |dir| dir.name,
+                }, self.index - 1);
+            }
+        }
+    }
+
     pub fn deinit(self: *TreeIterator) void {
         self.level_stack.deinit(self.allocator);
+        self.excluded_files.deinit(self.allocator);
+    }
+
+    pub fn iterateLevelled(self: TreeIterator, node_idx: usize) ?LevelledNodesIterator {
+        return switch (self.tree.flat_tree.items[node_idx]) {
+            .file => null,
+            .dir => |dir| .{
+                .flat_tree = self.tree.flat_tree.items[node_idx + 1 ..],
+                .flat_breadth = dir.flat_breadth,
+            },
+        };
+    }
+
+    pub fn iterateLevelledFromConsumedNode(self: TreeIterator) ?LevelledNodesIterator {
+        if (self.index == 0)
+            return .{ .flat_tree = self.flat_tree.items };
+
+        return self.iterateLevelled(self.index - 1);
+    }
+
+    /// asserts node at index is a dir
+    pub fn levelEmpty(self: TreeIterator, node_idx: usize) bool {
+        return switch (self.tree.flat_tree.items[node_idx]) {
+            .file => unreachable,
+            .dir => |dir| dir.flat_breadth == 0,
+        };
     }
 
     pub fn nextNodeLevel(self: *TreeIterator, node_storage: *?TreeNode) std.mem.Allocator.Error!?usize {
