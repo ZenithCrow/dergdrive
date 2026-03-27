@@ -12,6 +12,17 @@ pub const client = struct {
         pub const Manifest = @import("client/track/Manifest.zig");
         pub const SyncOp = @import("client/track/SyncOp.zig");
     };
+
+    pub const transmit = struct {
+        pub const ChunkBuffer = @import("client/transmit/ChunkBuffer.zig");
+        pub const Cryptor = @import("client/transmit/Cryptor.zig");
+        pub const FileReader = @import("client/transmit/FileReader.zig");
+        pub const RawFileChunkBuffer = @import("client/transmit/RawFileChunkBuffer.zig");
+        pub const RequestChunkBuffer = @import("client/transmit/RequestChunkBuffer.zig");
+        pub const RequestSender = @import("client/transmit/RequestSender.zig");
+        pub const RequestStorage = @import("client/transmit/RequestStorage.zig");
+        pub const pipe_adapter = @import("client/transmit/pipe_adapter.zig");
+    };
 };
 
 pub const conf = struct {

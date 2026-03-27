@@ -36,7 +36,7 @@ pub const CryptorCluster = struct {
                 .cluster = self,
             };
 
-            cryptor.request_cbuf.initTransmitFileMsg();
+            cryptor.request_cbuf.initTransmitFileMsg() catch unreachable;
         }
     }
 
@@ -59,8 +59,8 @@ pub const CryptorCluster = struct {
         for (&self.cryptors) |*cryptor| {
             cryptor.running.store(true, .release);
             comptime switch (dir) {
-                .encrypt => try self.th_pool.spawn(pipeEncrypted, cryptor),
-                .decrypt => try self.th_pool.spawn(pipeDecrypted, cryptor),
+                .encrypt => try self.th_pool.spawn(pipeEncrypted, .{cryptor}),
+                .decrypt => try self.th_pool.spawn(pipeDecrypted, .{cryptor}),
             };
         }
     }
@@ -90,15 +90,16 @@ pub fn pipeEncrypted(self: *Cryptor) !void {
 
         const in_buf = self.raw_file_cbuf.chunk_buf.getWrittenBuf();
         const out_buf_all = self.request_cbuf.trns_msg.newMsg(
-            in_buf + crypt.nonce_auth_len,
-            self.raw_file_cbuf.request.request_type,
+            @as(u32, @intCast(in_buf.len)) + crypt.nonce_auth_len,
+            req.req_type,
             req.id,
         ) catch unreachable;
 
         self.request_cbuf.req_id = self.raw_file_cbuf.req_id;
         self.request_cbuf.trns_msg.dest_chunk.copyValues(switch (req.req_type) {
-            .file_post => req.req.file_post,
-            .file_new => req.req.file_new,
+            .file_post => req.req.file_post.dest,
+            .file_new => req.req.file_new.length,
+            else => unreachable,
         });
         self.request_cbuf.trns_msg.dest_chunk.write();
 
@@ -109,7 +110,7 @@ pub fn pipeEncrypted(self: *Cryptor) !void {
         std.mem.copyForwards(u8, out_buf_all[crypt.AesAlgo.tag_length..crypt.nonce_auth_len], &nonce);
         const out_buf = out_buf_all[crypt.nonce_auth_len..];
 
-        crypt.AesAlgo.encrypt(out_buf, &auth_tag, in_buf, &nonce, &nonce, &self.cluster.key);
+        crypt.AesAlgo.encrypt(out_buf, &auth_tag, in_buf, &nonce, nonce, self.cluster.key);
         std.mem.copyForwards(u8, out_buf_all[0..crypt.AesAlgo.tag_length], &auth_tag);
 
         self.raw_file_cbuf.req_id = null;
@@ -121,29 +122,6 @@ pub fn pipeEncrypted(self: *Cryptor) !void {
 
 pub fn pipeDecrypted(self: *Cryptor) !void {
     while (self.running.load(.acquire)) {
-        //  TODO: rework this entirely once networking is in place
-        self.request_cbuf.chunk_buf.waitUntilState(.full);
-        self.raw_file_cbuf.chunk_buf.waitUntilState(.empty);
-
-        //  TODO: forward request
-        var in_buf = &[_]u8{}; //  TODO: get network enc content buffer here
-        const auth_tag = in_buf[0..crypt.AesAlgo.tag_length];
-        const nonce = in_buf[crypt.AesAlgo.tag_length..crypt.nonce_auth_len];
-        in_buf = in_buf[crypt.nonce_auth_len..];
-
-        const out_buf = self.raw_file_cbuf.back_buf[0..in_buf.len];
-
-        //  TODO: report integrity violation
-        crypt.AesAlgo.decrypt(out_buf, in_buf, auth_tag, nonce, nonce, &self.cluster.key) catch continue;
-
-        {
-            self.raw_file_cbuf.w_lock.lock();
-            defer self.raw_file_cbuf.w_lock.unlock();
-
-            self.raw_file_cbuf.data_len = out_buf.len;
-        }
-
-        self.cluster.request_pa.signalCryptorAvailable(self);
-        self.cluster.raw_file_pa.signalCryptorAvailable(self);
+        //  TODO: do this once networking is in place
     }
 }

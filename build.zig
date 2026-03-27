@@ -26,6 +26,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     }).module("znetw");
 
+    mod.addImport("znetw", net_mod);
     exe_mod.addImport("znetw", net_mod);
 
     const exe = b.addExecutable(.{

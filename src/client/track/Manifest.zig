@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const IncludeTree = @import("IncludeTree.zig");
-
 const Conf = @import("dergdrive").conf.Conf;
 const crypt = @import("dergdrive").crypt;
 
@@ -17,6 +15,7 @@ const GetSyncTimestampFromCachedManifestError = Conf.OpenOrCreateConfFileError |
 const LoadFromManifestFileError = error{ NotLoaded, Illformed };
 const LoadManifestError = LoadFromManifestFileError || std.mem.Allocator.Error;
 const StoreManifestError = LoadFromManifestFileError || std.Io.Writer.Error;
+
 const OridePrefixIterator = struct {
     section_start: []const u8,
     byte_idx: usize = 0,
@@ -100,7 +99,7 @@ const OridePrefix = struct {
     }
 };
 
-const FileRecord = struct {
+pub const FileRecord = struct {
     path: []const u8,
     tstamp: Timestamp,
     pfix_id: u32,
@@ -119,7 +118,7 @@ const FileRecord = struct {
     }
 };
 
-const FileRecordKey = struct {
+pub const FileRecordKey = struct {
     key: []const u8,
     owned: bool,
 
@@ -157,13 +156,11 @@ const UnassignedPrefix = struct {
     val: []const u8,
 };
 
-pub const FileRecords = std.ArrayHashMap(FileRecordKey, FileRecord, FileRecordContext, true);
-
 conf: Conf,
 mfest_file: ?[]const u8 = null,
 is_local: bool = true,
 sync_tstamp: ?Timestamp = null,
-file_records: FileRecords,
+file_records: std.ArrayHashMap(FileRecordKey, FileRecord, FileRecordContext, true),
 local_pfixes: std.AutoArrayHashMap(u32, []const u8),
 oride_pfixes: std.AutoArrayHashMap(u32, []const u8),
 unassigned_pfixes: std.array_list.Managed(UnassignedPrefix),

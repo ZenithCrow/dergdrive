@@ -19,14 +19,14 @@ running: AtomicBool = .init(false),
 send_th: Thread = undefined,
 
 pub fn init(self: *RequestSender) void {
-    self.prio_request = .init(&self.id_supply);
+    self.prio_request.init();
 }
 
 pub fn start(self: *RequestSender) Thread.SpawnError!void {
     self.running.store(true, .release);
     errdefer self.running.store(false, .release);
 
-    self.send_th = try Thread.spawn(.{}, sendLoop, self);
+    self.send_th = try Thread.spawn(.{}, sendLoop, .{self});
 }
 
 pub fn stop(self: *RequestSender) void {
@@ -75,7 +75,7 @@ fn readBuf(self: *RequestSender) []u8 {
     }
 
     for (0..self.enc_file_reqs.cryptors.len + 2) |i| {
-        const idx = if (i == self.enc_file_reqs.cryptors.len + 1) self.waitUntilAvailable() else i;
+        const idx: u8 = if (i == self.enc_file_reqs.cryptors.len + 1) self.waitUntilAvailable() else @truncate(i);
         const req_buf_res = self.getReqBuf(idx) catch unreachable;
 
         req_buf_res.chunk_buf.w_lock.lock();
@@ -84,6 +84,8 @@ fn readBuf(self: *RequestSender) []u8 {
         if (req_buf_res.chunk_buf.empty == .full)
             return req_buf_res.chunk_buf.getBuf()[0..req_buf_res.chunk_buf.data_len];
     }
+
+    unreachable;
 }
 
 fn finishReadBuf(self: *RequestSender, used_buf: []u8) void {
@@ -94,7 +96,7 @@ fn finishReadBuf(self: *RequestSender, used_buf: []u8) void {
         }
     }
 
-    if (used_buf.ptr == self.prio_request.chunk_buf.back_buf.ptr)
+    if (used_buf.ptr == &self.prio_request.chunk_buf.back_buf)
         self.prio_request.chunk_buf.signalState(.empty);
 }
 

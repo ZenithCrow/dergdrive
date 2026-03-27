@@ -18,7 +18,12 @@ raw_file_adapter: *pipe_adapter.RawFilePipeAdapter,
 req_stor: *RequestStorage,
 
 pub const PipeFileError = File.GetEndPosError || File.ReadError;
-pub const SyncFileError = error{};
+pub const SyncFileError = error{
+    NoOp,
+    NoPushDeletedPullNew,
+    IllegalCombination,
+    NoPushNewPullDeleted,
+} || std.mem.Allocator.Error || PipeFileError;
 pub const SyncDirError = error{};
 
 fn pipeFile(self: *FileReader, file: File, req_id: sync.RequestChunk.IdT) PipeFileError!void {
@@ -57,34 +62,38 @@ fn pipeFile(self: *FileReader, file: File, req_id: sync.RequestChunk.IdT) PipeFi
     }
 }
 
-pub fn syncFile(self: *FileReader, subpath: []const u8, file: ?File, sync_op: SyncOp, mfest_records: Manifest.FileRecords) SyncFileError!void {
+pub fn syncFile(self: *FileReader, subpath: []const u8, file: ?File, sync_op: SyncOp, mfest_records: @FieldType(Manifest, "file_records")) SyncFileError!void {
     const file_record = mfest_records.get(.borrowed(subpath));
     if (file == null) {
         if (file_record) |fr| {
             _ = fr;
-            switch (sync_op.push.deleted << 1 | sync_op.pull.new) {
-                0b00 => return error.NoPushDeletedPullNew,
+            switch (@as(u2, @intFromBool(sync_op.push.deleted)) << 1 | @as(u2, @intFromBool(sync_op.pull.new))) {
+                0b00 => return SyncFileError.NoPushDeletedPullNew,
                 0b01 => {
                     //  TODO: pull file
                 },
                 0b10 => {
                     //  TODO: delete file on server
                 },
-                0b11 => return error.IllegalCombination,
+                0b11 => return SyncFileError.IllegalCombination,
             }
-        } else return error.NoOp;
+        } else return SyncFileError.NoOp;
     } else if (file_record == null) {
-        switch (sync_op.push.new << 1 | sync_op.pull.deleted) {
-            0b00 => return error.NoPushNewPullDeleted,
+        switch (@as(u2, @intFromBool(sync_op.push.new)) << 1 | @as(u2, @intFromBool(sync_op.pull.deleted))) {
+            0b00 => return SyncFileError.NoPushNewPullDeleted,
             0b01 => {
                 //  TODO: delele local file
             },
             0b10 => {
-                try self.pipeFile(file.?, self.req_stor.newPushFileNew());
+                try self.pipeFile(file.?, try self.req_stor.newPushFileNew());
             },
-            0b11 => return error.IllegalCombination,
+            0b11 => return SyncFileError.IllegalCombination,
         }
     }
 }
 
 //pub fn syncDir(self: *FileReader, subpath: []const u8, dir: Dir, sync_op: SyncOp) SyncDirError!void {}
+
+test "huh" {
+    try std.testing.expect(true);
+}

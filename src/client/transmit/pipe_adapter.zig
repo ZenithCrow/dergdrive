@@ -1,8 +1,9 @@
 const std = @import("std");
 const Thread = std.Thread;
+
+const Cryptor = @import("Cryptor.zig");
 const RawFileChunkBuffer = @import("RawFileChunkBuffer.zig");
 const RequestChunkBuffer = @import("RequestChunkBuffer.zig");
-const Cryptor = @import("Cryptor.zig");
 
 pub fn PipeAdapter(comptime raw_side: bool) type {
     return struct {
@@ -44,7 +45,7 @@ pub fn PipeAdapter(comptime raw_side: bool) type {
             self.idx_lock.lock();
             defer self.idx_lock.unlock();
 
-            for (&self.cryptors, 0..) |*c, i| {
+            for (self.cryptors, 0..) |*c, i| {
                 if (c == cryptor) {
                     self.avail_idx = @as(u8, @truncate(i));
                     self.avail_cond.signal();
@@ -69,7 +70,7 @@ pub fn PipeAdapter(comptime raw_side: bool) type {
                 cbuf.chunk_buf.w_lock.lock();
                 defer cbuf.chunk_buf.w_lock.unlock();
 
-                if (!(@intFromEnum(op) ^ @intFromEnum(cbuf.chunk_buf.empty)))
+                if ((@intFromEnum(op) ^ @intFromEnum(cbuf.chunk_buf.empty)) == 0)
                     return cbuf;
             }
 
