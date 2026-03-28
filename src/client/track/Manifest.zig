@@ -3,6 +3,8 @@ const std = @import("std");
 const Conf = @import("dergdrive").conf.Conf;
 const crypt = @import("dergdrive").crypt;
 
+const FileRecordMap = @import("FileRecordMap.zig");
+
 const StoreLocalPrefixOverridesError = Conf.OpenOrCreateConfFileError || std.fs.File.WriteError;
 const Manifest = @This();
 
@@ -47,14 +49,14 @@ const FileRecordIterator = struct {
     elem_idx: u64 = 0,
     elem_len: u64,
 
-    pub fn next(self: *@This()) ?FileRecord {
+    pub fn next(self: *@This()) ?FileRecordMap.FileRecord {
         if (self.byte_idx >= self.section_start.len or self.elem_idx >= self.elem_len)
             return null;
 
         const path = std.mem.span(@as([*:0]const u8, @ptrCast(self.section_start.ptr)) + self.byte_idx);
         const fixed_data_start = self.byte_idx + path.len + 1;
 
-        const file_record: FileRecord = .{
+        const file_record: FileRecordMap.FileRecord = .{
             .path = path,
             .tstamp = .{
                 .mod_time = std.mem.readInt(i128, self.section_start[fixed_data_start .. fixed_data_start + @sizeOf(i128)][0..@sizeOf(i128)], .little),
@@ -73,7 +75,7 @@ const FileRecordIterator = struct {
     }
 };
 
-const Timestamp = struct {
+pub const Timestamp = struct {
     mod_time: i128,
     mod_dev_id: u32,
 
@@ -99,58 +101,6 @@ const OridePrefix = struct {
     }
 };
 
-pub const FileRecord = struct {
-    path: []const u8,
-    tstamp: Timestamp,
-    pfix_id: u32,
-    blk_idx: u32,
-    offset: u32,
-    length: u64,
-
-    pub fn format(self: FileRecord, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        try writer.writeAll(self.path);
-        try writer.writeInt(u8, 0, .little);
-        try self.tstamp.format(writer);
-        try writer.writeInt(u32, self.pfix_id, .little);
-        try writer.writeInt(u32, self.blk_idx, .little);
-        try writer.writeInt(u32, self.offset, .little);
-        try writer.writeInt(u64, self.length, .little);
-    }
-};
-
-pub const FileRecordKey = struct {
-    key: []const u8,
-    owned: bool,
-
-    pub fn borrowed(key: []const u8) FileRecordKey {
-        return .{
-            .key = key,
-            .owned = false,
-        };
-    }
-};
-
-const FileRecordContext = struct {
-    pub fn hash(_: @This(), c: FileRecordKey) u32 {
-        var key = c.key;
-
-        var h: std.hash.Fnv1a_32 = .init();
-
-        while (key.len >= 64) : (key = key[64..]) {
-            h.update(key[0..64]);
-        }
-
-        if (key.len > 0)
-            h.update(key);
-
-        return h.final();
-    }
-
-    pub fn eql(_: @This(), x: FileRecordKey, y: FileRecordKey, _: usize) bool {
-        return std.mem.eql(u8, x.key, y.key);
-    }
-};
-
 const UnassignedPrefix = struct {
     key: []const u8,
     val: []const u8,
@@ -160,7 +110,7 @@ conf: Conf,
 mfest_file: ?[]const u8 = null,
 is_local: bool = true,
 sync_tstamp: ?Timestamp = null,
-file_records: std.ArrayHashMap(FileRecordKey, FileRecord, FileRecordContext, true),
+file_record_map: FileRecordMap,
 local_pfixes: std.AutoArrayHashMap(u32, []const u8),
 oride_pfixes: std.AutoArrayHashMap(u32, []const u8),
 unassigned_pfixes: std.array_list.Managed(UnassignedPrefix),
@@ -169,7 +119,7 @@ allocator: std.mem.Allocator,
 pub fn init(conf: Conf, allocator: std.mem.Allocator) Manifest {
     return .{
         .conf = conf,
-        .file_records = .init(allocator),
+        .file_record_map = .init(allocator),
         .local_pfixes = .init(allocator),
         .oride_pfixes = .init(allocator),
         .unassigned_pfixes = .init(allocator),
@@ -181,11 +131,7 @@ pub fn deinit(self: *Manifest) void {
     self.mfest_file = null;
     self.sync_tstamp = null;
 
-    for (self.file_records.keys()) |key| {
-        if (key.owned)
-            self.allocator.free(key.key);
-    }
-    self.file_records.deinit();
+    self.file_record_map.deinit();
 
     for (self.local_pfixes.values()) |value| {
         self.allocator.free(value);
@@ -334,7 +280,7 @@ fn getFileRecordIterator(self: Manifest, oride_pfix_iter: ?OridePrefixIterator) 
 fn loadFileRecords(self: *Manifest, oride_pfix_iter: ?OridePrefixIterator) (LoadFromManifestFileError || std.mem.Allocator.Error)!void {
     var iter = try self.getFileRecordIterator(oride_pfix_iter);
     while (iter.next()) |file_record| {
-        const local_fp: FileRecordKey = blk: {
+        const local_fp: FileRecordMap.FileRecordKey = blk: {
             if (self.local_pfixes.get(file_record.pfix_id)) |local_pfix| {
                 if (self.oride_pfixes.get(file_record.pfix_id)) |oride_pfix| {
                     if (std.mem.startsWith(u8, file_record.path, oride_pfix)) {
@@ -355,7 +301,7 @@ fn loadFileRecords(self: *Manifest, oride_pfix_iter: ?OridePrefixIterator) (Load
             break :blk .{ .key = file_record.path, .owned = false };
         };
 
-        const res = try self.file_records.getOrPut(local_fp);
+        const res = try self.file_record_map.file_records.getOrPut(local_fp);
         if (res.found_existing)
             log.warn("Duplicate file record \"{s}\". Overwriting existing file record.", .{file_record.path});
 
@@ -364,17 +310,17 @@ fn loadFileRecords(self: *Manifest, oride_pfix_iter: ?OridePrefixIterator) (Load
 }
 
 fn storeFileRecords(self: *Manifest, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-    const count: u64 = @intCast(self.file_records.count());
+    const count: u64 = @intCast(self.file_record_map.file_records.count());
     try writer.writeInt(u64, count, .little);
 
-    for (self.file_records.values()) |val| {
+    for (self.file_record_map.file_records.values()) |val| {
         try val.format(writer);
     }
 }
 
 pub fn loadManifest(self: *Manifest) LoadManifestError!void {
     self.oride_pfixes.clearRetainingCapacity();
-    self.file_records.clearRetainingCapacity();
+    self.file_record_map.clear();
     self.unassigned_pfixes.clearRetainingCapacity();
 
     self.sync_tstamp = try self.getSyncTimestamp();
@@ -420,7 +366,7 @@ test "manifest parsing" {
 
     try manifest.local_pfixes.put(1, try allocator.dupe(u8, "owo/owo"));
 
-    const rec1: FileRecord = .{
+    const rec1: FileRecordMap.FileRecord = .{
         .blk_idx = 69,
         .length = 98425,
         .offset = 88,
@@ -432,7 +378,7 @@ test "manifest parsing" {
         },
     };
 
-    const rec2: FileRecord = .{
+    const rec2: FileRecordMap.FileRecord = .{
         .blk_idx = 77,
         .length = 885822,
         .offset = 122,
@@ -444,9 +390,9 @@ test "manifest parsing" {
         },
     };
 
-    try manifest.file_records.put(.{ .key = "foo/owo", .owned = false }, rec1);
+    try manifest.file_record_map.put(.borrowed("foo/owo"), rec1);
 
-    try manifest.file_records.put(.{ .key = "owo/owo", .owned = false }, rec2);
+    try manifest.file_record_map.put(.borrowed("owo/owo"), rec2);
 
     var writer: std.Io.Writer.Allocating = .init(allocator);
     defer writer.deinit();
@@ -456,6 +402,6 @@ test "manifest parsing" {
     manifest.mfest_file = writer.written();
     try manifest.loadManifest();
 
-    try std.testing.expectEqualDeep(rec1, manifest.file_records.get(.{ .key = "foo/owo", .owned = false }).?);
-    try std.testing.expectEqualDeep(rec2, manifest.file_records.get(.{ .key = "owo/owo", .owned = false }).?);
+    try std.testing.expectEqualDeep(rec1, manifest.file_record_map.file_records.get(.borrowed("foo/owo")).?);
+    try std.testing.expectEqualDeep(rec2, manifest.file_record_map.file_records.get(.borrowed("owo/owo")).?);
 }

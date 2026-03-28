@@ -9,6 +9,7 @@ pub const cli = struct {
 pub const client = struct {
     pub const track = struct {
         pub const IncludeTree = @import("client/track/IncludeTree.zig");
+        pub const FileRecordMap = @import("client/track/FileRecordMap.zig");
         pub const Manifest = @import("client/track/Manifest.zig");
         pub const SyncOp = @import("client/track/SyncOp.zig");
     };
