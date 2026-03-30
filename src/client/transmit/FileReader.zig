@@ -260,3 +260,13 @@ pub inline fn syncDir(
 ) SyncDirError!void {
     try self.syncUnit(subpath, dir, sync_op, mfest_records, allocator);
 }
+
+// pub fn syncDirRules(
+//     self: *FileReader,
+//     subpath: []const u8,
+//     dir: ?Dir,
+//     sync_op: SyncOp,
+//     file_records: *FileRecordMap,
+//     itree_iter: *IncludeTree.TreeIterator,
+//     allocator: std.mem.Allocator,
+// ) void {}

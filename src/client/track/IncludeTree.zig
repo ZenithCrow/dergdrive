@@ -108,7 +108,7 @@ const MatchIterator = struct {
     }
 };
 
-const TreeIterator = struct {
+pub const TreeIterator = struct {
     include_all: bool = false,
     tree: IncludeTree,
     index: usize = 0,
@@ -175,7 +175,7 @@ const TreeIterator = struct {
 
     pub fn iterateLevelledFromConsumedNode(self: TreeIterator) ?LevelledNodesIterator {
         if (self.index == 0)
-            return .{ .flat_tree = self.flat_tree.items };
+            return .{ .flat_tree = self.tree.flat_tree.items };
 
         return self.iterateLevelled(self.index - 1);
     }
@@ -314,7 +314,7 @@ fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, leve
                     .file => _ = try self.addNode(.{ .file = full_path.transferOwnership() }),
                     .directory => node_index = try self.addNode(.{ .dir = .{ .name = full_path.transferOwnership(), .flat_breadth = 0 } }),
                     else => {
-                        // TODO handle symlinks
+                        //  TODO: handle symlinks
                         node_added = false;
                     },
                 }

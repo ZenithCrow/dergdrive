@@ -1,4 +1,5 @@
 const std = @import("std");
+const Mutex = std.Thread.Mutex;
 
 const Manifest = @import("Manifest.zig");
 
@@ -52,6 +53,7 @@ const FileRecordHashMap = std.ArrayHashMap(FileRecordKey, FileRecord, FileRecord
 
 file_records: FileRecordHashMap,
 sorted: bool = false,
+w_lock: Mutex = .{},
 
 pub fn init(allocator: std.mem.Allocator) FileRecordMap {
     return .{
@@ -60,6 +62,9 @@ pub fn init(allocator: std.mem.Allocator) FileRecordMap {
 }
 
 pub fn deinit(self: *FileRecordMap) void {
+    self.w_lock.lock();
+    defer self.w_lock.unlock();
+
     for (self.file_records.keys()) |key| {
         if (key.owned)
             self.file_records.allocator.free(key.key);
@@ -68,32 +73,93 @@ pub fn deinit(self: *FileRecordMap) void {
 }
 
 pub inline fn clear(self: *FileRecordMap) void {
+    self.w_lock.lock();
+    defer self.w_lock.unlock();
+
     self.file_records.clearRetainingCapacity();
     self.sorted = false;
 }
 
 pub inline fn put(self: *FileRecordMap, key: FileRecordKey, val: FileRecord) std.mem.Allocator.Error!void {
+    self.w_lock.lock();
+    defer self.w_lock.unlock();
+
     try self.file_records.put(key, val);
     self.sorted = false;
 }
 
-pub fn getDir(self: *FileRecordMap, dir_path: []const u8) []FileRecord {
-    if (!self.sorted) {
-        self.file_records.sort(struct {
-            self: *FileRecordHashMap,
+pub fn sort(self: *FileRecordMap) void {
+    self.w_lock.lock();
+    defer self.w_lock.unlock();
 
-            pub fn lessThan(ctx: @This(), a_i: usize, b_i: usize) bool {
-                const keys = ctx.self.keys();
-                return std.mem.lessThan(u8, keys[a_i].key, keys[b_i].key);
-            }
-        }{ .self = &self.file_records });
+    self.file_records.sort(struct {
+        self: *FileRecordHashMap,
+
+        pub fn lessThan(ctx: @This(), a_i: usize, b_i: usize) bool {
+            const keys = ctx.self.keys();
+            return std.mem.lessThan(u8, keys[a_i].key, keys[b_i].key);
+        }
+    }{ .self = &self.file_records });
+}
+
+pub fn getDirRange(self: *FileRecordMap, dir_path: []const u8) struct { usize, usize } {
+    self.w_lock.lock();
+    defer self.w_lock.unlock();
+
+    if (!self.sorted) {
+        self.w_lock.unlock();
+        self.sort();
+        self.w_lock.lock();
     }
 
-    const range = std.sort.equalRange(FileRecordKey, self.file_records.keys(), dir_path, struct {
+    return std.sort.equalRange(FileRecordKey, self.file_records.keys(), dir_path, struct {
         pub fn compareFn(context: []const u8, item: FileRecordKey) std.math.Order {
+            if (std.mem.startsWith(u8, item.key, context))
+                return std.math.Order.eq;
+
             return std.mem.order(u8, context, item.key);
         }
     }.compareFn);
+}
 
+pub fn getDir(self: *FileRecordMap, dir_path: []const u8) []FileRecord {
+    const range = self.getDirRange(dir_path);
     return self.file_records.values()[range.@"0"..range.@"1"];
+}
+
+test "get dir from file records" {
+    const allocator = std.testing.allocator;
+    var frmap: FileRecordMap = .init(allocator);
+    defer frmap.deinit();
+
+    const generic_file_record: FileRecord = .{
+        .tstamp = .{ .mod_dev_id = 0, .mod_time = 0 },
+        .blk_idx = 0,
+        .length = 1,
+        .offset = 0,
+        .path = "owo",
+        .pfix_id = 0,
+    };
+
+    try frmap.put(.borrowed("bar/owo/foo.txt"), generic_file_record);
+    try frmap.put(.borrowed("owo/bar.txt"), generic_file_record);
+    try frmap.put(.borrowed("foo/foo"), generic_file_record);
+    try frmap.put(.borrowed("bar/owo/bar.txt"), generic_file_record);
+    try frmap.put(.borrowed("bar/baz/foo.txt"), generic_file_record);
+    try frmap.put(.borrowed("uwu/owo/test.txt"), generic_file_record);
+
+    {
+        const range = frmap.getDirRange("bar/owo");
+        const dir_keys = frmap.file_records.keys()[range.@"0"..range.@"1"];
+        try std.testing.expectEqual(2, dir_keys.len);
+        try std.testing.expectEqualStrings("bar/owo/bar.txt", dir_keys[0].key);
+        try std.testing.expectEqualStrings("bar/owo/foo.txt", dir_keys[1].key);
+    }
+
+    {
+        const range = frmap.getDirRange("owo/bar.txt");
+        const dir_keys = frmap.file_records.keys()[range.@"0"..range.@"1"];
+        try std.testing.expectEqual(1, dir_keys.len);
+        try std.testing.expectEqualStrings("owo/bar.txt", dir_keys[0].key);
+    }
 }

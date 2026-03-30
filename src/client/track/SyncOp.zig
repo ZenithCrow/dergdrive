@@ -7,12 +7,12 @@ pub const OpFlags = struct {
     synced: bool,
     new: bool,
     deleted: bool,
-    excluded: bool,
 
     pub fn perform(self: OpFlags) bool {
-        return self.synced | self.new | self.deleted | self.excluded;
+        return self.synced | self.new | self.deleted;
     }
 };
 
 push: OpFlags,
 pull: OpFlags,
+excluded: bool,
