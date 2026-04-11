@@ -3,6 +3,10 @@ const std = @import("std");
 pub const crypt = @import("crypt/crypt.zig");
 
 pub const cli = struct {
+    pub const command_exec = @import("cli/command_exec.zig");
+    pub const Command = @import("cli/Command.zig");
+    pub const Option = @import("cli/Option.zig");
+    pub const parser = @import("cli/parser.zig");
     pub const prompt = @import("cli/prompt.zig");
 };
 
