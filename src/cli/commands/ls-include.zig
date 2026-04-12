@@ -111,13 +111,53 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
     var stdout_w = std.fs.File.stdout().writerStreaming(&w_buf);
     const decorate = stdout_w.file.getOrEnableAnsiEscapeSupport();
 
+    const vert_pipe: u16 = '\u{2502}';
+    const bent_pipe: u16 = '\u{2514}';
+    const hor_pipe: u16 = '\u{2500}';
+    const triple_pipe: u16 = '\u{251c}';
+    const space: u16 = '\u{0020}';
+
     const mode_str = cli.parser.getAssociatedValue(args, mode_opt.long, mode_opt.short, mode_opt.value.?.eql_sign) orelse mode_opt.value.?.default.?;
     switch (std.meta.stringToEnum(Mode, mode_str) orelse {
         log.err("Invalid mode: {s}.", .{mode_str});
         return error.InvalidMode;
     }) {
         .include => {
-            cli.termfmt.printDecorated(&stdout_w.interface, decorate, &.{.bgreen}, "ello :3\n", .{});
+            cli.termfmt.printDecorated(&stdout_w.interface, decorate, &.{ .bold, .blue }, "{s}\n", .{root_path});
+
+            var tree_iter = tree.iterateTree(allocator);
+            defer tree_iter.deinit();
+
+            var prev_node: ?[]const u8 = null;
+            var prev_lvl: ?usize = null;
+            var node: ?IncludeTree.TreeNode = null;
+            while (try tree_iter.nextNodeLevel(&node)) |lvl| : ({
+                prev_node = node.?.path();
+                prev_lvl = lvl;
+            }) {
+                for (tree_iter.level_stack.items, 0..) |l, i| {
+                    var l_iter = l;
+
+                    if (i == tree_iter.level_stack.items.len - 1) {
+                        try stdout_w.interface.print("{u}{u}{u} ", .{ if (l_iter.next() == null) bent_pipe else triple_pipe, hor_pipe, hor_pipe });
+
+                        var item_text = switch (node.?) {
+                            .dir => |dir| .{
+                                dir.name,
+                                &[_]cli.termfmt.Decoration{ .bold, if (IncludeTree.levelIsIgnore(lvl)) .red else .blue },
+                            },
+                            .file => |file| .{
+                                file,
+                                if (IncludeTree.levelIsIgnore(lvl)) &[_]cli.termfmt.Decoration{.red} else &[_]cli.termfmt.Decoration{},
+                            },
+                        };
+                        if (prev_lvl != null and prev_lvl.? < lvl)
+                            item_text.@"0" = item_text.@"0"[prev_node.?.len + 1 ..];
+
+                        cli.termfmt.printDecorated(&stdout_w.interface, decorate, item_text.@"1", "{s}\n", .{item_text.@"0"});
+                    } else try stdout_w.interface.print("{u}   ", .{if (l_iter.next() == null) space else vert_pipe});
+                }
+            }
         },
         .traverse => {},
     }

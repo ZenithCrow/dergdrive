@@ -45,6 +45,13 @@ pub const DirNode = struct {
 pub const TreeNode = union(enum) {
     file: FileNode,
     dir: DirNode,
+
+    pub fn path(self: TreeNode) []const u8 {
+        return switch (self) {
+            .file => |file| file,
+            .dir => |dir| dir.name,
+        };
+    }
 };
 
 const log = std.log.scoped(.@"client/track/IncludeTree");
@@ -350,11 +357,11 @@ fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, leve
     return num_nodes_added;
 }
 
-inline fn ignore(rule: []const u8) bool {
+pub inline fn ignore(rule: []const u8) bool {
     return rule.len > 0 and rule[0] == '!';
 }
 
-inline fn levelIsIgnore(level: usize) bool {
+pub inline fn levelIsIgnore(level: usize) bool {
     return level % 2 == 0;
 }
 
