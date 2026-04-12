@@ -8,6 +8,7 @@ pub const cli = struct {
     pub const Option = @import("cli/Option.zig");
     pub const parser = @import("cli/parser.zig");
     pub const prompt = @import("cli/prompt.zig");
+    pub const termfmt = @import("cli/termfmt.zig");
 };
 
 pub const client = struct {

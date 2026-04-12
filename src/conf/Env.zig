@@ -76,6 +76,10 @@ pub fn deinit(self: *Env) void {
     self.modified_envs.deinit();
 }
 
+pub fn deinitGlobal() void {
+    g_env.deinit();
+}
+
 pub fn loadEnvs(self: *Env) std.mem.Allocator.Error!void {
     for (self.conf.conf_file_hierarchy) |env_conf_file| {
         var env_iter: Conf.KeyValueIterator = .init(self.conf.getConf(env_conf_file, self.allocator) catch |err| switch (err) {

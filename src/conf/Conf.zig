@@ -144,7 +144,7 @@ pub const KeyValueIterator = struct {
     }
 };
 
-const config_filename = "config";
+const config_filename = "config.ini";
 const g_conf_file_default: ConfFile = .{ .nspace = .from(.{ .config = .local }), .sub_path = config_filename, .always_create = true };
 const g_conf_file_hierarchy: []const ConfFile = switch (builtin.os.tag) {
     .linux => &.{

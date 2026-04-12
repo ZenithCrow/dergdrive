@@ -47,6 +47,8 @@ pub const TreeNode = union(enum) {
     dir: DirNode,
 };
 
+const log = std.log.scoped(.@"client/track/IncludeTree");
+
 const RuleIterator = struct {
     iterator: std.mem.SplitIterator(u8, .any),
 
@@ -297,12 +299,12 @@ fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, leve
         var full_path: FullPath = .{ .path = try std.mem.join(self.allocator, "/", path_chunks), .allocator = self.allocator };
         defer full_path.deinit();
 
-        // std.debug.print("full_path: {s}\n", .{full_path.path});
+        // log.debug("full_path: {s}", .{full_path.path});
 
         var match_iter: MatchIterator = .init(full_path.path, entry.kind == .directory, rule_iter);
         const prio_rule: ?[]const u8 = match_iter.findLastMatch();
 
-        // if (prio_rule) |rule| std.debug.print("matched rule: {s}\n", .{rule});
+        // if (prio_rule) |rule| log.debug("matched rule: {s}", .{rule});
 
         var node_index: ?usize = null;
         var node_added = false;
@@ -360,7 +362,7 @@ fn searchForChildRules(parent_path: []const u8, rule_iter: RuleIterator, level: 
     var iter = rule_iter;
     return while (iter.next()) |rule| {
         if (canHaveChild(parent_path, rule, level)) {
-            std.debug.print("found child rule: {s}\n", .{rule});
+            // log.debug("found child rule: {s}", .{rule});
             break true;
         }
     } else false;

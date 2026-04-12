@@ -1,9 +1,16 @@
 const std = @import("std");
 
+const dergdrive = @import("dergdrive");
+
 const Command = @import("Command.zig");
-const help = @import("commands/help.zig");
-const help_option = @import("commands/help_option.zig");
+const help_cmd = @import("commands/help.zig");
+const @"ls-include_cmd" = @import("commands/ls-include.zig");
 const Option = @import("Option.zig");
+const help_opt = @import("options/help.zig");
+const @"include-rules_opt" = @import("options/include-rules.zig");
+const @"root-dir_opt" = @import("options/root-dir.zig");
+const vol_opt = @import("options/vol.zig");
+const parser = @import("parser.zig");
 
 const prog_name = "dergdrive";
 
@@ -12,7 +19,10 @@ pub const ExecError = error{
     UnknownCommand,
 } || Command.ExecError;
 
-const commands: []const Command = &.{help.command};
+const commands: []const Command = &.{
+    help_cmd.command,
+    @"ls-include_cmd".command,
+};
 const CommandTup = struct { []const u8, Command };
 const command_tups: [commands.len]CommandTup = blk: {
     var tups: [commands.len]CommandTup = undefined;
@@ -23,9 +33,11 @@ const command_tups: [commands.len]CommandTup = blk: {
     break :blk tups;
 };
 
-const global_options: []const Option = &.{help_option.option};
+const global_options: []const Option = &.{help_opt.option};
 
 const command_map: std.StaticStringMap(Command) = .initComptime(command_tups);
+
+const log = std.log.scoped(.@"cli/command_exec");
 
 pub fn exec(args: []const []const u8, allocator: std.mem.Allocator) ExecError!void {
     if (args.len == 0) {
@@ -34,17 +46,71 @@ pub fn exec(args: []const []const u8, allocator: std.mem.Allocator) ExecError!vo
     }
 
     if (command_map.get(args[0])) |command| {
-        try command.exec_fn(args[1..], allocator);
+        if (parser.indexOfOption(args, help_opt.option.long, help_opt.option.short) != null) {
+            printCmdHelp(command);
+        } else try command.exec_fn(args[1..], allocator);
     } else {
         printHelp();
         return ExecError.UnknownCommand;
     }
 }
 
-var w_buf: [512]u8 = undefined;
-pub fn printHelp() void {
-    std.log.info("Usage: {s} [command] [options]", .{prog_name});
+fn printEvenlySpaced(w: *std.Io.Writer, point: []const u8, desc: []const u8) std.Io.Writer.Error!void {
+    const desc_tab = 24;
+    const space_around = 2;
 
+    var name_buf: [desc_tab]u8 = undefined;
+
+    for (&name_buf) |*c| {
+        c.* = ' ';
+    }
+
+    try w.writeAll(name_buf[0..space_around]);
+
+    if (point.len > desc_tab - 2 * space_around) {
+        try w.print("{s}\n{s}", .{ point, &name_buf });
+    } else {
+        std.mem.copyForwards(u8, name_buf[space_around .. space_around + point.len], point);
+        try w.writeAll(name_buf[space_around..]);
+    }
+
+    try w.writeAll(desc);
+    try w.writeByte('\n');
+}
+
+fn printOptionEvenlySpaced(w: *std.Io.Writer, option: Option) std.Io.Writer.Error!void {
+    var f_buf: [128]u8 = undefined;
+    var fw = std.Io.Writer.fixed(&f_buf);
+
+    if (option.short) |flag| {
+        fw.print("-{c} ", .{flag}) catch unreachable;
+    } else fw.writeAll("   ") catch unreachable;
+
+    try fw.writeAll(option.long);
+
+    if (option.value) |val| {
+        try fw.writeByte(if (val.eql_sign) '=' else ' ');
+
+        if (val.default != null)
+            try fw.writeByte('[');
+
+        try fw.writeAll(val.name orelse "VALUE");
+
+        if (val.default) |def| {
+            try fw.print("] (default: {s})", .{def});
+        }
+    }
+
+    try printEvenlySpaced(w, fw.buffered(), option.desc);
+}
+
+const param_notice = "Parameters in capitals are user provided. If enclosed in brackets [], the parameter is optional or has a default value.";
+
+pub fn printHelp() void {
+    std.log.info(param_notice, .{});
+    std.log.info("Usage: {s} COMMAND [OPTIONS]", .{prog_name});
+
+    var w_buf: [512]u8 = undefined;
     var stderr_w = std.fs.File.stderr().writerStreaming(&w_buf);
     stderr_w.interface.writeAll(
         \\
@@ -67,40 +133,112 @@ pub fn printHelp() void {
     ) catch return;
 
     for (global_options) |option| {
-        var f_buf: [128]u8 = undefined;
-        var w = std.Io.Writer.fixed(&f_buf);
-
-        if (option.short) |flag| {
-            w.print("-{c}, ", .{flag}) catch unreachable;
-        }
-
-        w.writeAll(option.long) catch {};
-
-        printEvenlySpaced(&stderr_w.interface, w.buffered(), option.desc) catch return;
+        printOptionEvenlySpaced(&stderr_w.interface, option) catch return;
     }
 
     stderr_w.interface.flush() catch {};
 }
 
-fn printEvenlySpaced(w: *std.Io.Writer, point: []const u8, desc: []const u8) std.Io.Writer.Error!void {
-    const desc_tab = 20;
-    const space_around = 2;
+pub fn printCmdHelp(cmd: Command) void {
+    std.log.info(param_notice, .{});
+    std.log.info("Usage: {s} {s}", .{ prog_name, cmd.usage });
 
-    var name_buf: [desc_tab]u8 = undefined;
+    var w_buf: [512]u8 = undefined;
+    var stderr_w = std.fs.File.stderr().writerStreaming(&w_buf);
+    stderr_w.interface.print(
+        \\
+        \\Brief:
+        \\
+        \\  {s}
+        \\
+    ,
+        .{cmd.desc},
+    ) catch return;
 
-    for (&name_buf) |*c| {
-        c.* = ' ';
+    if (cmd.long_desc) |ld| {
+        stderr_w.interface.print(
+            \\
+            \\Description:
+            \\
+            \\  {s}
+            \\
+        ,
+            .{ld},
+        ) catch return;
     }
 
-    try w.writeAll(name_buf[0..space_around]);
+    if (cmd.options.len > 0) {
+        stderr_w.interface.writeAll(
+            \\
+            \\Options:
+            \\
+            \\
+        ) catch return;
 
-    if (point.len > desc_tab - 2 * space_around) {
-        try w.print("{s}\n{s}", .{ point, &name_buf });
-    } else {
-        std.mem.copyForwards(u8, name_buf[space_around .. space_around + point.len], point);
-        try w.writeAll(name_buf[space_around..]);
+        for (cmd.options) |opt| {
+            printOptionEvenlySpaced(&stderr_w.interface, opt) catch return;
+        }
     }
 
-    try w.writeAll(desc);
-    try w.writeByte('\n');
+    stderr_w.interface.print(
+        \\
+        \\Global options:
+        \\
+        \\
+    ,
+        .{},
+    ) catch return;
+
+    for (global_options) |option| {
+        printOptionEvenlySpaced(&stderr_w.interface, option) catch return;
+    }
+
+    stderr_w.interface.flush() catch {};
+}
+
+pub const Context = struct {
+    vol: ?[]const u8 = null,
+    root_path: ?[]const u8 = null,
+    include_rules_path: ?[]const u8 = null,
+};
+
+pub fn initBroadContext(args: []const []const u8, allocator: std.mem.Allocator) dergdrive.cli.Command.ExecError!Context {
+    dergdrive.conf.Conf.initGlobal("");
+    var env: dergdrive.conf.Env = .init(dergdrive.conf.Conf.g_conf, allocator);
+
+    const load_evs_err_notice = "Failed to load envs due to error: {t}.";
+    env.loadEnvs() catch |err| {
+        log.err(load_evs_err_notice, .{err});
+        return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
+    };
+
+    const vol = if (getCliThenConfigValue(env, vol_opt.default_vol_opt_name, args, vol_opt.option)) |v| blk: {
+        dergdrive.conf.Conf.initGlobal(v);
+
+        // replace env with newer one having volume context
+        env.deinit();
+        env = .init(dergdrive.conf.Conf.g_conf, allocator);
+        env.loadEnvs() catch |err| {
+            log.err(load_evs_err_notice, .{err});
+            return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
+        };
+
+        break :blk v;
+    } else null;
+
+    dergdrive.conf.Env.g_env = env;
+
+    return .{
+        .vol = vol,
+        .root_path = getCliThenConfigValue(env, @"root-dir_opt".root_dir_opt_name, args, @"root-dir_opt".option),
+        .include_rules_path = getCliThenConfigValue(env, @"include-rules_opt".include_rules_opt_name, args, @"include-rules_opt".option),
+    };
+}
+
+pub fn deinitBroadContext() void {
+    dergdrive.conf.Env.deinitGlobal();
+}
+
+pub fn getCliThenConfigValue(env: dergdrive.conf.Env, config_opt_name: []const u8, args: []const []const u8, cli_opt: Option) ?[]const u8 {
+    return if (env.get(config_opt_name)) |v| v else if (parser.getAssociatedValue(args, cli_opt.long, cli_opt.short, (cli_opt.value orelse return null).eql_sign)) |v| v else null;
 }
