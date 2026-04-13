@@ -1,9 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const dergdrive = @import("dergdrive");
 const Conf = @This();
 
-pub const proj_name: []const u8 = "dergdrive";
+pub const proj_name: []const u8 = dergdrive.cli.command_exec.prog_name;
 
 pub const GetFileContentError = std.fs.File.StatError || std.mem.Allocator.Error || std.fs.File.ReadError;
 pub const GetFileContentFromPathError = GetFileContentError || std.fs.File.OpenError;
@@ -12,19 +13,33 @@ pub const WriteConfFileError = OpenOrCreateConfFileError || std.fs.File.WriteErr
 pub const GetConfError = GetFileContentError || GetFileContentFromPathError || OpenOrCreateConfFileError;
 pub const SetError = GetFileContentError || OpenOrCreateConfFileError || std.fs.File.SeekError || std.fs.File.SetEndPosError || std.fs.File.WriteError;
 
+const pers_internal: []const u8 = "./share";
+const cache_internal: []const u8 = "./cache";
+const config_internal: []const u8 = "./config";
+
 const config_global_linux: []const u8 = "/etc/" ++ proj_name;
 const config_local_linux: []const u8 = "~/.config/" ++ proj_name;
 const config_vol_local_linux: []const u8 = config_local_linux ++ "/{vol}";
 const config_secret_linux: []const u8 = config_local_linux ++ "/secret";
 const config_vol_secret_linux: []const u8 = config_vol_local_linux ++ "/secret";
-const config_internal: []const u8 = ".";
 const cache_global_linux: []const u8 = "/var/cache/" ++ proj_name;
 const cache_local_linux: []const u8 = "~/.cache/" ++ proj_name;
 const cache_vol_local_linux: []const u8 = cache_local_linux ++ "/{vol}";
 const pers_global_linux: []const u8 = "/usr/share/" ++ proj_name;
 const pers_local_linux: []const u8 = "~/.local/share/" ++ proj_name;
 const pers_vol_local_linux: []const u8 = pers_local_linux ++ "/{vol}";
-const pers_internal_linux: []const u8 = ".";
+
+const config_global_windows: []const u8 = pers_global_windows ++ "\\config";
+const config_local_windows: []const u8 = pers_local_windows ++ "\\config";
+const config_vol_local_windows: []const u8 = config_vol_local_windows ++ "\\{vol}";
+const config_secret_windows: []const u8 = config_local_windows ++ "\\secret";
+const config_vol_secret_windows: []const u8 = config_vol_local_windows ++ "\\secret";
+const cache_global_windows: []const u8 = config_global_windows ++ "\\cache";
+const cache_local_windows: []const u8 = "%TEMP%\\" ++ proj_name;
+const cache_vol_local_windows: []const u8 = cache_local_windows ++ "\\{vol}";
+const pers_global_windows: []const u8 = "%PROGRAMDATA%\\" ++ proj_name;
+const pers_local_windows: []const u8 = "%APPDATALOCAL%\\" ++ proj_name;
+const pers_vol_local_windows: []const u8 = pers_local_windows ++ "\\{vol}";
 
 pub const ConfPrefix = struct {
     config_global_linux: []const u8 = config_global_linux,
@@ -36,10 +51,11 @@ pub const ConfPrefix = struct {
     cache_global_linux: []const u8 = cache_global_linux,
     cache_local_linux: []const u8 = cache_local_linux,
     cache_vol_local_linux: []const u8 = cache_vol_local_linux,
+    cache_internal: []const u8 = cache_internal,
     pers_global_linux: []const u8 = pers_global_linux,
     pers_local_linux: []const u8 = pers_local_linux,
     pers_vol_local_linux: []const u8 = pers_vol_local_linux,
-    pers_internal_linux: []const u8 = pers_internal_linux,
+    pers_internal: []const u8 = pers_internal,
 };
 
 pub const Nspace = enum {
@@ -80,13 +96,14 @@ pub const PfixNspace = struct {
                     .global => self.pfix.cache_global_linux,
                     .local => self.pfix.cache_local_linux,
                     .vol_local => self.pfix.cache_vol_local_linux,
+                    .internal => self.pfix.cache_internal,
                     else => @panic("namespace not supported for cache"),
                 },
                 .pers => |nspace| switch (nspace) {
                     .global => self.pfix.pers_global_linux,
                     .local => self.pfix.pers_local_linux,
                     .vol_local => self.pfix.pers_vol_local_linux,
-                    .internal => self.pfix.pers_internal_linux,
+                    .internal => self.pfix.pers_internal,
                     else => @panic("namespace not supported for persistent storage"),
                 },
             },

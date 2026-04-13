@@ -12,7 +12,7 @@ const @"root-dir_opt" = @import("options/root-dir.zig");
 const vol_opt = @import("options/vol.zig");
 const parser = @import("parser.zig");
 
-const prog_name = "dergdrive";
+pub const prog_name = "dergdrive";
 
 pub const ExecError = error{
     NoArgsProvided,
