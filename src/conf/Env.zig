@@ -136,6 +136,27 @@ pub fn get(self: Env, key: []const u8) ?[]const u8 {
     return if (self.env_registry.get(key)) |env_val| env_val.val else null;
 }
 
+pub const GetWithCwdResultError = std.mem.Allocator.Error || std.fs.File.OpenError;
+
+pub const GetWithCwdResult = struct {
+    val: []const u8,
+    cwd: std.fs.Dir,
+};
+
+pub fn getWithCwd(self: Env, key: []const u8, iterate: bool) GetWithCwdResultError!?GetWithCwdResult {
+    if (self.env_registry.get(key)) |env_val| {
+        const full_path = try env_val.conf_file.getFullPath(self.conf, self.allocator);
+        defer self.allocator.free(full_path);
+
+        const last_slash = std.mem.lastIndexOfScalar(u8, full_path, '/');
+
+        return .{
+            .val = env_val.val,
+            .cwd = if (last_slash) |l| try std.fs.cwd().openDir(full_path[0..l], .{ .iterate = iterate }) else std.fs.cwd(),
+        };
+    } else return null;
+}
+
 pub fn set(self: *Env, key: []const u8, val: []const u8, conf_file: ?Conf.ConfFile) std.mem.Allocator.Error!void {
     const res = try self.env_registry.getOrPut(key);
     if (res.found_existing) {

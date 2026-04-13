@@ -86,8 +86,10 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
     };
     defer root_dir.close();
 
+    const cwd = if (try Env.g_env.getWithCwd(include_rules_opt.include_rules_opt_name, false)) |val| val.cwd else std.fs.cwd();
+
     const rule_text = blk: {
-        const rule_file = std.fs.cwd().openFile(include_rules_path, .{}) catch |err| {
+        const rule_file = cwd.openFile(include_rules_path, .{}) catch |err| {
             log.err("Couldn't open include rules file {s} due to error: {t}.", .{ include_rules_path, err });
             return error.RuleFileOpenFailed;
         };

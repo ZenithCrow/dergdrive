@@ -2,9 +2,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const dergdrive = @import("dergdrive");
-const Conf = @This();
-
 pub const proj_name: []const u8 = dergdrive.cli.command_exec.prog_name;
+
+const Conf = @This();
 
 pub const GetFileContentError = std.fs.File.StatError || std.mem.Allocator.Error || std.fs.File.ReadError;
 pub const GetFileContentFromPathError = GetFileContentError || std.fs.File.OpenError;
@@ -165,6 +165,7 @@ const config_filename = "config.ini";
 const g_conf_file_default: ConfFile = .{ .nspace = .from(.{ .config = .local }), .sub_path = config_filename, .always_create = true };
 const g_conf_file_hierarchy: []const ConfFile = switch (builtin.os.tag) {
     .linux => &.{
+        .{ .nspace = .from(.{ .config = .internal }), .sub_path = config_filename, .always_create = false },
         .{ .nspace = .from(.{ .config = .global }), .sub_path = config_filename, .always_create = false },
         g_conf_file_default,
         .{ .nspace = .from(.{ .config = .vol_local }), .sub_path = config_filename, .always_create = false },

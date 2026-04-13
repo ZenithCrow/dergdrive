@@ -240,5 +240,5 @@ pub fn deinitBroadContext() void {
 }
 
 pub fn getCliThenConfigValue(env: dergdrive.conf.Env, config_opt_name: []const u8, args: []const []const u8, cli_opt: Option) ?[]const u8 {
-    return if (env.get(config_opt_name)) |v| v else if (parser.getAssociatedValue(args, cli_opt.long, cli_opt.short, (cli_opt.value orelse return null).eql_sign)) |v| v else null;
+    return if (parser.getAssociatedValue(args, cli_opt.long, cli_opt.short, (cli_opt.value orelse return null).eql_sign)) |v| v else if (env.get(config_opt_name)) |v| v else null;
 }
