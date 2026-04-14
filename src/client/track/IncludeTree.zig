@@ -3,36 +3,6 @@ const expect = std.testing.expect;
 
 const IncludeTree = @This();
 
-pub fn main() !void {
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var dir = try std.fs.openDirAbsolute("/home/vlcaak", .{ .iterate = true });
-    defer dir.close();
-
-    const rule_text = @embedFile("./include.txt");
-
-    var tree = IncludeTree.init(dir, rule_text, allocator);
-    defer tree.deinit();
-
-    try tree.buildTree();
-
-    var iter = tree.iterateTree(allocator);
-    defer iter.deinit();
-
-    var node_storage: ?TreeNode = null;
-    var level: ?usize = null;
-    level = try iter.nextNodeLevel(&node_storage);
-
-    while (level) |lev| : (level = try iter.nextNodeLevel(&node_storage)) {
-        switch (node_storage.?) {
-            .file => |file_name| std.debug.print("{d}; file: {s}\n", .{ lev, file_name }),
-            .dir => |dir_node| std.debug.print("{d}; dir: {s} (breadth: {d})\n", .{ lev, dir_node.name, dir_node.flat_breadth }),
-        }
-    }
-}
-
 pub const IterateDirError = std.fs.Dir.Iterator.Error || std.mem.Allocator.Error || std.fs.Dir.OpenError;
 
 pub const FileNode = []const u8;
@@ -50,6 +20,13 @@ pub const TreeNode = union(enum) {
         return switch (self) {
             .file => |file| file,
             .dir => |dir| dir.name,
+        };
+    }
+
+    pub fn depth(self: TreeNode) usize {
+        return switch (self) {
+            .file => 1,
+            .dir => |dir| dir.flat_breadth,
         };
     }
 };
@@ -117,6 +94,44 @@ const MatchIterator = struct {
     }
 };
 
+pub fn swapSlices(comptime T: type, parent: []T, a: []const T, b: []const T) void {
+    swapSlicesIdx(T, parent, a.ptr - parent.ptr, a.len, b.ptr - parent.ptr, b.len);
+}
+
+pub fn swapSlicesIdx(comptime T: type, arr: []T, a_idx: usize, a_len: usize, b_idx: usize, b_len: usize) void {
+    std.debug.assert(a_idx != b_idx);
+    std.debug.assert(a_idx + a_len <= b_idx);
+
+    std.mem.reverse(T, arr[a_idx .. a_idx + a_len]);
+    std.mem.reverse(T, arr[a_idx + a_len .. b_idx]);
+    std.mem.reverse(T, arr[b_idx .. b_idx + b_len]);
+    std.mem.reverse(T, arr[a_idx .. b_idx + b_len]);
+}
+
+test "swap slices" {
+    const allocator = std.testing.allocator;
+
+    const text1 = "hellomom";
+    const slc1 = try allocator.dupe(u8, text1);
+    defer allocator.free(slc1);
+
+    swapSlicesIdx(u8, slc1, 0, 5, 5, 3);
+    try std.testing.expectEqualStrings("momhello", slc1);
+
+    swapSlicesIdx(u8, slc1, 0, 4, 4, 4);
+    try std.testing.expectEqualStrings("ellomomh", slc1);
+
+    swapSlicesIdx(u8, slc1, 0, 2, 2, 6);
+    try std.testing.expectEqualStrings("lomomhel", slc1);
+
+    const text2 = "moan straight out of hell it's soooooooo gut";
+    const slc2 = try allocator.dupe(u8, text2);
+    defer allocator.free(slc2);
+
+    swapSlicesIdx(u8, slc2, 6, 8, 32, 9);
+    try std.testing.expectEqualStrings("moan soooooooo out of hell it's straight gut", slc2);
+}
+
 pub const TreeIterator = struct {
     include_all: bool = false,
     tree: IncludeTree,
@@ -129,41 +144,82 @@ pub const TreeIterator = struct {
     pub const LevelledNodesIterator = struct {
         flat_tree: []const TreeNode,
         index: usize = 0,
-        flat_breadth: ?usize = null,
         node_idx: usize = 0,
 
-        pub fn next(self: *LevelledNodesIterator) ?TreeNode {
+        pub fn reset(self: *LevelledNodesIterator) void {
+            self.index = 0;
+            self.node_idx = 0;
+        }
+
+        pub fn peek(self: LevelledNodesIterator) ?TreeNode {
             if (self.index >= self.flat_tree.len)
                 return null;
 
-            if (self.flat_breadth) |fb| {
-                if (self.node_idx >= fb)
-                    return null;
-            }
+            return self.flat_tree[self.index];
+        }
 
-            const node = self.flat_tree[self.index];
-            self.index += switch (node) {
-                .file => 1,
-                .dir => |dir_node| dir_node.flat_breadth + 1,
-            };
+        pub fn next(self: *LevelledNodesIterator) ?TreeNode {
+            if (self.peek()) |node| {
+                self.index += switch (node) {
+                    .file => 1,
+                    .dir => |dir_node| dir_node.flat_breadth + 1,
+                };
 
-            self.node_idx += 1;
+                self.node_idx += 1;
 
-            return node;
+                return node;
+            } else return null;
+        }
+
+        pub fn peekPrev(self: LevelledNodesIterator) ?TreeNode {
+            return if (self.node_idx > 0) self.at(self.node_idx - 1) else null;
+        }
+
+        pub fn at(self: LevelledNodesIterator, idx: usize) ?TreeNode {
+            var iter = self;
+            iter.reset();
+            var i: usize = 0;
+            return while (iter.next()) |n| : (i += 1) {
+                if (i == idx)
+                    break n;
+            } else null;
+        }
+
+        pub fn nextBranch(self: *LevelledNodesIterator) ?[]const TreeNode {
+            const idx = self.index;
+            _ = self.next() orelse return null;
+            return self.flat_tree[idx..self.index];
+        }
+
+        pub fn branchAt(self: LevelledNodesIterator, idx: usize) ?[]const TreeNode {
+            var iter = self;
+            iter.reset();
+            var i: usize = 0;
+            return while (iter.nextBranch()) |b| : (i += 1) {
+                if (i == idx)
+                    break b;
+            } else null;
+        }
+
+        pub fn count(self: LevelledNodesIterator) usize {
+            var iter = self;
+            var c: usize = 0;
+            while (iter.next()) |_| : (c += 1) {}
+            return c;
         }
     };
 
-    pub fn init(self: *TreeIterator) std.mem.Allocator.Error!void {
-        var node: ?TreeNode = null;
-        var level: ?usize = null;
+    pub fn reset(self: *TreeIterator) void {
+        self.index = 0;
+        self.level = 1;
+        self.level_stack.shrinkRetainingCapacity(0);
+    }
 
-        while (level) |lev| : (level = try self.nextNodeLevel(&node)) {
-            if (levelIsIgnore(lev)) {
-                try self.excluded_files.putNoClobber(self.allocator, switch (node.?) {
-                    .file => |path| path,
-                    .dir => |dir| dir.name,
-                }, self.index - 1);
-            }
+    /// To load the excluded path into a map, this function depletes the iterator. Call `reset` to go back to the initial state of the iterator.
+    pub fn initExcludes(self: *TreeIterator) std.mem.Allocator.Error!void {
+        while (try self.nextNodeLevel()) |res| {
+            if (levelIsIgnore(res.level))
+                try self.excluded_files.putNoClobber(self.allocator, res.node.path(), self.index - 1);
         }
     }
 
@@ -175,10 +231,7 @@ pub const TreeIterator = struct {
     pub fn iterateLevelled(self: TreeIterator, node_idx: usize) ?LevelledNodesIterator {
         return switch (self.tree.flat_tree.items[node_idx]) {
             .file => null,
-            .dir => |dir| .{
-                .flat_tree = self.tree.flat_tree.items[node_idx + 1 ..],
-                .flat_breadth = dir.flat_breadth,
-            },
+            .dir => |dir| .{ .flat_tree = self.tree.flat_tree.items[node_idx + 1 .. node_idx + 1 + dir.flat_breadth] },
         };
     }
 
@@ -189,6 +242,65 @@ pub const TreeIterator = struct {
         return self.iterateLevelled(self.index - 1);
     }
 
+    //  TODO: sort in place instead of this bullshit
+    //  NOTE: but I kinda like mess I caused by not wanting to implement my own sort in place :3
+    pub fn sortLevelFromConsumedNode(self: TreeIterator) std.mem.Allocator.Error!void {
+        var iter = self.iterateLevelledFromConsumedNode() orelse return;
+        var hmap: std.StringArrayHashMap(void) = .init(self.allocator);
+        defer hmap.deinit();
+
+        const count = iter.count();
+        if (count == 0)
+            return;
+
+        var iter_cpy = iter;
+        try hmap.ensureTotalCapacity(count);
+        for (0..count) |_| {
+            hmap.putAssumeCapacityNoClobber(iter_cpy.next().?.path(), {});
+        }
+
+        hmap.sort(struct {
+            self: *@TypeOf(hmap),
+
+            fn @"human -- ehm well derg- naturalCharLessThan"(a: u8, b: u8) std.math.Order {
+                const al = std.ascii.toLower(a);
+                const bl = std.ascii.toLower(b);
+                return if (al != bl) std.math.order(al, bl) else std.math.order(a, b);
+            }
+
+            fn humanStringLessThan(lhs_p: []const u8, rhs_p: []const u8) bool {
+                const lhs = if (lhs_p.len > 1 and lhs_p[0] == '.') lhs_p[1..] else lhs_p;
+                const rhs = if (rhs_p.len > 1 and rhs_p[0] == '.') rhs_p[1..] else rhs_p;
+
+                const n = @min(lhs.len, rhs.len);
+                for (lhs[0..n], rhs[0..n]) |lhs_elem, rhs_elem| {
+                    switch (@"human -- ehm well derg- naturalCharLessThan"(lhs_elem, rhs_elem)) {
+                        .eq => continue,
+                        .lt => return true,
+                        .gt => return false,
+                    }
+                }
+                return std.math.order(lhs.len, rhs.len) == .lt;
+            }
+
+            pub fn lessThan(ctx: @This(), a_i: usize, b_i: usize) bool {
+                const keys = ctx.self.keys();
+                return humanStringLessThan(keys[a_i], keys[b_i]);
+            }
+        }{ .self = &hmap });
+
+        const arr: []TreeNode = @constCast(iter.flat_tree);
+        for (0..count) |i| {
+            var hmap_idx = hmap.getIndex(iter.at(i).?.path()).?;
+
+            while (i != hmap_idx) : ({
+                hmap_idx = hmap.getIndex(iter.branchAt(i).?[0].path()).?;
+            }) {
+                swapSlices(TreeNode, arr, iter.branchAt(i).?, iter.branchAt(hmap_idx).?);
+            }
+        }
+    }
+
     /// asserts node at index is a dir
     pub fn levelEmpty(self: TreeIterator, node_idx: usize) bool {
         return switch (self.tree.flat_tree.items[node_idx]) {
@@ -197,46 +309,67 @@ pub const TreeIterator = struct {
         };
     }
 
-    pub fn nextNodeLevel(self: *TreeIterator, node_storage: *?TreeNode) std.mem.Allocator.Error!?usize {
-        if (self.level > self.level_stack.items.len) {
-            const level_breadth: usize = if (self.level > 1) switch (self.tree.flat_tree.items[self.index - 1]) {
-                .dir => |dir_node| dir_node.flat_breadth,
-                else => unreachable,
-            } else self.tree.flat_tree.items.len;
+    pub const NodeLevelResult = struct {
+        node: TreeNode,
+        level: usize,
+    };
 
-            try self.level_stack.append(self.allocator, .{ .flat_tree = self.tree.flat_tree.items[self.index .. self.index + level_breadth] });
-        }
+    pub fn peekNode(self: TreeIterator) ?TreeNode {
+        return if (self.index < self.tree.flat_tree.items.len) self.tree.flat_tree.items[self.index] else null;
+    }
 
-        var current_level_iter = &self.level_stack.items[self.level - 1];
-        var node: ?TreeNode = current_level_iter.next();
+    //  TODO: make this same as nextNodeLevel but without advancing the iterator
+    /// Don't use this, it doesn't work (at all lol) the same with respect to its relative `nextNodeLevel` function.
+    pub fn peekNodeLevel(self: TreeIterator) ?NodeLevelResult {
+        if (self.peekNode()) |node| {
+            var level = self.level;
+            var cur_level_iter = if (level > self.level_stack.items.len) self.iterateLevelledFromConsumedNode().? else self.level_stack.items[level - 1];
+            var casc_node = cur_level_iter.next();
 
-        while (node == null and self.level > 1) {
-            _ = self.level_stack.pop();
-            self.level -= 1;
-
-            current_level_iter = &self.level_stack.items[self.level - 1];
-            node = current_level_iter.next();
-        }
-
-        const current_level = self.level;
-
-        if (node) |n| {
-            switch (n) {
-                .dir => self.level += 1,
-                else => {},
+            while (casc_node == null and level > 1) {
+                level -= 1;
+                cur_level_iter = self.level_stack.items[level - 1];
+                casc_node = cur_level_iter.next();
             }
-        }
 
-        self.index += 1;
+            return .{
+                .node = node,
+                .level = level,
+            };
+        } else return null;
+    }
 
-        node_storage.* = node;
-        return if (node != null) current_level else null;
+    pub fn nextNodeLevel(self: *TreeIterator) std.mem.Allocator.Error!?NodeLevelResult {
+        if (self.peekNode()) |node| {
+            if (self.level > self.level_stack.items.len)
+                try self.level_stack.append(self.allocator, self.iterateLevelledFromConsumedNode().?);
+
+            var cur_level_iter: *LevelledNodesIterator = &self.level_stack.items[self.level - 1];
+            var casc_node = cur_level_iter.next();
+
+            while (casc_node == null and self.level > 1) {
+                _ = self.level_stack.pop();
+                self.level -= 1;
+
+                cur_level_iter = &self.level_stack.items[self.level - 1];
+                casc_node = cur_level_iter.next();
+            }
+
+            const pulled_lvl = self.level;
+
+            if (node == .dir)
+                self.level += 1;
+
+            self.index += 1;
+            return .{
+                .node = node,
+                .level = pulled_lvl,
+            };
+        } else return null;
     }
 
     pub fn nextNode(self: *TreeIterator) std.mem.Allocator.Error!?TreeNode {
-        var node_storage: ?TreeNode = null;
-        _ = try self.nextNodeLevel(&node_storage);
-        return node_storage;
+        return if (try self.nextNodeLevel()) |res| res.node else null;
     }
 };
 
@@ -269,6 +402,16 @@ pub fn buildTree(self: *IncludeTree) IterateDirError!void {
 
 pub fn iterateTree(self: IncludeTree, allocator: std.mem.Allocator) TreeIterator {
     return .{ .tree = self, .allocator = allocator };
+}
+
+pub fn sort(self: IncludeTree) std.mem.Allocator.Error!void {
+    var tree_iter = self.iterateTree(self.allocator);
+    defer tree_iter.deinit();
+    try tree_iter.sortLevelFromConsumedNode();
+
+    while (try tree_iter.nextNode()) |_| {
+        try tree_iter.sortLevelFromConsumedNode();
+    }
 }
 
 fn addNode(self: *IncludeTree, node: TreeNode) std.mem.Allocator.Error!usize {

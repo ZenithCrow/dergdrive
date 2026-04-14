@@ -109,6 +109,8 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
         return error.BuildTreeFailed;
     };
 
+    try tree.sort();
+
     var w_buf: [512]u8 = undefined;
     var stdout_w = std.fs.File.stdout().writerStreaming(&w_buf);
     const decorate = stdout_w.file.getOrEnableAnsiEscapeSupport();
@@ -130,31 +132,28 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
             var tree_iter = tree.iterateTree(allocator);
             defer tree_iter.deinit();
 
-            var prev_node: ?[]const u8 = null;
-            var prev_lvl: ?usize = null;
-            var node: ?IncludeTree.TreeNode = null;
-            while (try tree_iter.nextNodeLevel(&node)) |lvl| : ({
-                prev_node = node.?.path();
-                prev_lvl = lvl;
-            }) {
+            while (try tree_iter.nextNodeLevel()) |res| { //: (_ = try tree_iter.nextNodeLevel()) {
                 for (tree_iter.level_stack.items, 0..) |l, i| {
                     var l_iter = l;
 
                     if (i == tree_iter.level_stack.items.len - 1) {
                         try stdout_w.interface.print("{u}{u}{u} ", .{ if (l_iter.next() == null) bent_pipe else triple_pipe, hor_pipe, hor_pipe });
 
-                        var item_text = switch (node.?) {
+                        var item_text = switch (res.node) {
                             .dir => |dir| .{
                                 dir.name,
-                                &[_]cli.termfmt.Decoration{ .bold, if (IncludeTree.levelIsIgnore(lvl)) .red else .blue },
+                                &[_]cli.termfmt.Decoration{ .bold, if (IncludeTree.levelIsIgnore(res.level)) .red else .blue },
                             },
                             .file => |file| .{
                                 file,
-                                if (IncludeTree.levelIsIgnore(lvl)) &[_]cli.termfmt.Decoration{.red} else &[_]cli.termfmt.Decoration{},
+                                if (IncludeTree.levelIsIgnore(res.level)) &[_]cli.termfmt.Decoration{.red} else &[_]cli.termfmt.Decoration{},
                             },
                         };
-                        if (prev_lvl != null and prev_lvl.? < lvl)
-                            item_text.@"0" = item_text.@"0"[prev_node.?.len + 1 ..];
+                        if (i > 0) {
+                            if (tree_iter.level_stack.items[i - 1].peekPrev()) |prev| {
+                                item_text.@"0" = item_text.@"0"[prev.path().len + 1 ..];
+                            }
+                        }
 
                         cli.termfmt.printDecorated(&stdout_w.interface, decorate, item_text.@"1", "{s}\n", .{item_text.@"0"});
                     } else try stdout_w.interface.print("{u}   ", .{if (l_iter.next() == null) space else vert_pipe});
