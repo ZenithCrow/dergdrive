@@ -19,7 +19,7 @@ pub const std_options: std.Options = .{
                     .info => "\x1b[34m",
                     .warn => "\x1b[33m",
                 } ++ comptime level.asText() ++ "\x1b[0m";
-                const prefix2 = "\x1b[2m" ++ if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): " ++ "\x1b[0m";
+                const prefix2 = "\x1b[2m" ++ (if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ") ++ "\x1b[0m";
 
                 const w = std.debug.lockStderrWriter(&buf);
                 defer std.debug.unlockStderrWriter();

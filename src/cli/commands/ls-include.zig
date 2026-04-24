@@ -35,6 +35,7 @@ pub const command: cli.Command = .{
         mode_opt,
         hide_include_opt,
         hide_ignore_opt,
+        list_ignore_opt,
     },
 };
 
@@ -51,7 +52,7 @@ const mode_opt: cli.Option = .{
 
 const hide_include_opt: cli.Option = .{
     .long = "--hide-include",
-    .short = 'h',
+    .short = 'c',
     .desc = "Don't show included files in traverse mode",
 };
 
@@ -59,6 +60,12 @@ const hide_ignore_opt: cli.Option = .{
     .long = "--hide-ignore",
     .short = 'g',
     .desc = "Don't show ignored files in traverse mode",
+};
+
+const list_ignore_opt: cli.Option = .{
+    .long = "--list-ignore",
+    .short = 'l',
+    .desc = "List directories whose contents are all ignored",
 };
 
 const Mode = enum {
@@ -104,40 +111,41 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
 
     var tree: IncludeTree = .init(root_dir, rule_text, allocator);
     defer tree.deinit();
-    tree.buildTree() catch |err| {
-        log.err("Failed to build include tree due to error: {t}.", .{err});
-        return error.BuildTreeFailed;
-    };
-
-    try tree.sort();
 
     var w_buf: [512]u8 = undefined;
     var stdout_w = std.fs.File.stdout().writerStreaming(&w_buf);
     const decorate = stdout_w.file.getOrEnableAnsiEscapeSupport();
 
-    const vert_pipe: u16 = '\u{2502}';
-    const bent_pipe: u16 = '\u{2514}';
-    const hor_pipe: u16 = '\u{2500}';
-    const triple_pipe: u16 = '\u{251c}';
-    const space: u16 = '\u{0020}';
+    try cli.termfmt.printDecorated(&stdout_w.interface, decorate, &.{ .bold, .blue }, "{s}\n", .{root_path});
+
+    const vert_pipe = "\u{2502}";
+    const bent_pipe = "\u{2514}";
+    const hor_pipe = "\u{2500}";
+    const triple_pipe = "\u{251c}";
+    const space = "\u{0020}";
 
     const mode_str = cli.parser.getAssociatedValue(args, mode_opt.long, mode_opt.short, mode_opt.value.?.eql_sign) orelse mode_opt.value.?.default.?;
-    switch (std.meta.stringToEnum(Mode, mode_str) orelse {
+    sw: switch (std.meta.stringToEnum(Mode, mode_str) orelse {
         log.err("Invalid mode: {s}.", .{mode_str});
         return error.InvalidMode;
     }) {
         .include => {
-            cli.termfmt.printDecorated(&stdout_w.interface, decorate, &.{ .bold, .blue }, "{s}\n", .{root_path});
+            tree.buildTree() catch |err| {
+                log.err("Failed to build include tree due to error: {t}.", .{err});
+                return error.BuildTreeFailed;
+            };
+
+            try tree.sort();
 
             var tree_iter = tree.iterateTree(allocator);
             defer tree_iter.deinit();
 
-            while (try tree_iter.nextNodeLevel()) |res| { //: (_ = try tree_iter.nextNodeLevel()) {
+            while (try tree_iter.nextNodeLevel()) |res| {
                 for (tree_iter.level_stack.items, 0..) |l, i| {
                     var l_iter = l;
 
                     if (i == tree_iter.level_stack.items.len - 1) {
-                        try stdout_w.interface.print("{u}{u}{u} ", .{ if (l_iter.next() == null) bent_pipe else triple_pipe, hor_pipe, hor_pipe });
+                        try stdout_w.interface.print("{s}" ++ hor_pipe ++ hor_pipe ++ "", .{if (l_iter.next() == null) bent_pipe else triple_pipe});
 
                         var item_text = switch (res.node) {
                             .dir => |dir| .{
@@ -155,12 +163,158 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
                             }
                         }
 
-                        cli.termfmt.printDecorated(&stdout_w.interface, decorate, item_text.@"1", "{s}\n", .{item_text.@"0"});
-                    } else try stdout_w.interface.print("{u}   ", .{if (l_iter.next() == null) space else vert_pipe});
+                        try cli.termfmt.printDecorated(&stdout_w.interface, decorate, item_text.@"1", "{s}\n", .{item_text.@"0"});
+                    } else try stdout_w.interface.print("{s}   ", .{if (l_iter.next() == null) space else vert_pipe});
                 }
             }
         },
-        .traverse => {},
+        .traverse => {
+            const DirIter = struct {
+                pub const IptCtx = struct {
+                    iter: *const IncludeTree,
+                    level_stack: *std.ArrayList(bool),
+                    decorate: bool,
+                    hide_include: bool,
+                    hide_ignore: bool,
+                    list_ignore: bool,
+                    writer: *std.Io.Writer,
+                    allocator: std.mem.Allocator,
+                };
+
+                pub fn iteratePrintDirectory(dir: std.fs.Dir, path: []const u8, level: usize, ipt_ctx: *const IptCtx) !void {
+                    var iterator = dir.iterate();
+                    const EntryT = struct {
+                        kind: std.fs.Dir.Entry.Kind,
+                        full_path: []const u8,
+                        map_include: ?bool,
+                        is_included: bool,
+
+                        pub fn getEntryName(self: @This()) []const u8 {
+                            return if (std.mem.lastIndexOfScalar(u8, self.full_path, '/')) |idx| self.full_path[idx + 1 ..] else self.full_path;
+                        }
+                    };
+
+                    var dir_list: std.ArrayListUnmanaged(EntryT) = .empty;
+                    defer dir_list.deinit(ipt_ctx.allocator);
+
+                    while (try iterator.next()) |entry| {
+                        switch (entry.kind) {
+                            .directory, .file => |k| {
+                                const full_path = if (path.len != 0) try std.mem.join(ipt_ctx.allocator, "/", &.{ path, entry.name }) else try ipt_ctx.allocator.dupe(u8, entry.name);
+
+                                const map_include: ?bool = if (ipt_ctx.iter.flat_tree.map.get(full_path)) |item_lvl| !IncludeTree.levelIsIgnore(item_lvl) else null;
+                                const is_included = if (map_include) |m| m else IncludeTree.levelIsIgnore(level);
+
+                                if (is_included and ipt_ctx.hide_include or !is_included and ipt_ctx.hide_ignore) {
+                                    ipt_ctx.allocator.free(full_path);
+                                    continue;
+                                }
+
+                                try dir_list.append(ipt_ctx.allocator, .{
+                                    .kind = k,
+                                    .full_path = full_path,
+                                    .map_include = map_include,
+                                    .is_included = is_included,
+                                });
+                            },
+                            else => continue,
+                        }
+                    }
+                    defer for (dir_list.items) |item| {
+                        ipt_ctx.allocator.free(item.full_path);
+                    };
+
+                    std.mem.sortUnstable(EntryT, dir_list.items, {}, struct {
+                        pub fn lessThan(_: void, lhs: EntryT, rhs: EntryT) bool {
+                            return dergdrive.util.sort.humanStringLessThan(lhs.getEntryName(), rhs.getEntryName());
+                        }
+                    }.lessThan);
+
+                    try ipt_ctx.level_stack.append(ipt_ctx.allocator, true);
+
+                    for (dir_list.items, 0..) |item, i| {
+                        if (i == dir_list.items.len - 1)
+                            ipt_ctx.level_stack.items[ipt_ctx.level_stack.items.len - 1] = false;
+
+                        for (ipt_ctx.level_stack.items, 0..) |has_next, j| {
+                            try ipt_ctx.writer.print("{s} ", .{switch (@as(u2, @intFromBool(j == ipt_ctx.level_stack.items.len - 1)) << 1 | @as(u2, @intFromBool(has_next))) {
+                                0b00 => "   ",
+                                0b01 => vert_pipe ++ "  ",
+                                0b10 => bent_pipe ++ hor_pipe ++ hor_pipe,
+                                0b11 => triple_pipe ++ hor_pipe ++ hor_pipe,
+                            }});
+                        }
+
+                        const item_decor = switch (item.kind) {
+                            .directory => &[_]cli.termfmt.Decoration{ .bold, if (item.is_included) .blue else .red },
+                            .file => if (item.is_included) &[_]cli.termfmt.Decoration{} else &[_]cli.termfmt.Decoration{.red},
+                            else => unreachable,
+                        };
+
+                        const entry_name = item.getEntryName();
+                        try cli.termfmt.printDecorated(ipt_ctx.writer, ipt_ctx.decorate, item_decor, "{s}\n", .{entry_name});
+
+                        const lvl_empty = if (ipt_ctx.list_ignore or IncludeTree.levelIsIgnore(level)) false else std.sort.binarySearch([]const u8, ipt_ctx.iter.flat_tree.map.keys(), item.full_path, struct {
+                            pub fn compareFn(p: []const u8, elem: []const u8) std.math.Order {
+                                if (std.mem.startsWith(u8, elem, p))
+                                    return .eq;
+
+                                return dergdrive.util.sort.humanStringOrder(p, elem);
+                            }
+                        }.compareFn) == null;
+
+                        if (item.kind == .directory and !lvl_empty) {
+                            var err: ?anyerror = null;
+                            if (dir.openDir(entry_name, .{ .iterate = true })) |d| {
+                                if (iteratePrintDirectory(d, entry_name, if (item.map_include != null) level + 1 else level, ipt_ctx)) |_| {} else |e| err = e;
+                            } else |e| err = e;
+
+                            if (err) |e| {
+                                for (ipt_ctx.level_stack.items) |has_next| {
+                                    try ipt_ctx.writer.print("{s} ", .{if (has_next) vert_pipe ++ "  " else "   "});
+                                }
+
+                                try ipt_ctx.writer.writeAll(bent_pipe ++ hor_pipe ++ hor_pipe ++ " ");
+                                try cli.termfmt.printDecorated(ipt_ctx.writer, ipt_ctx.decorate, &[_]cli.termfmt.Decoration{.red}, "Couldn't list directory contents due to error: {t}.\n", .{e});
+                            }
+                        }
+                    }
+
+                    _ = ipt_ctx.level_stack.pop();
+                }
+            };
+
+            const hide_include = cli.parser.indexOfOption(args, hide_include_opt.long, hide_include_opt.short) != null;
+            const hide_ignore = cli.parser.indexOfOption(args, hide_ignore_opt.long, hide_ignore_opt.short) != null;
+
+            if (hide_include and hide_ignore) {
+                log.info("Nothing to show.", .{});
+                break :sw;
+            }
+
+            tree.buildMap() catch |err| {
+                log.err("Failed to build include map due to error: {t}.", .{err});
+                return error.BuildTreeFailed;
+            };
+
+            tree.sort() catch unreachable;
+
+            var level_stack: std.ArrayList(bool) = .empty;
+            defer level_stack.deinit(allocator);
+
+            const ipt_ctx: DirIter.IptCtx = .{
+                .iter = &tree,
+                .level_stack = &level_stack,
+                .decorate = decorate,
+                .hide_include = hide_include,
+                .hide_ignore = hide_ignore,
+                .list_ignore = cli.parser.indexOfOption(args, list_ignore_opt.long, list_ignore_opt.short) != null,
+                .writer = &stdout_w.interface,
+                .allocator = allocator,
+            };
+
+            try DirIter.iteratePrintDirectory(root_dir, "", 1, &ipt_ctx);
+        },
     }
 
     try stdout_w.interface.flush();

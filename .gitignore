@@ -4,4 +4,3 @@ zig-out/
 
 /config/
 include.txt
-.test/

@@ -17,10 +17,10 @@ pub const Decoration = enum {
 
 const esc: u8 = '\x1b';
 
-pub fn printDecorated(fw: *std.Io.Writer, decorate: bool, decor: []const Decoration, comptime fmt: []const u8, args: anytype) void {
+pub fn printDecorated(fw: *std.Io.Writer, decorate: bool, decor: []const Decoration, comptime fmt: []const u8, args: anytype) std.Io.Writer.Error!void {
     if (decorate) {
         for (decor) |d| {
-            fw.print("\x1b[{s}", .{switch (d) {
+            try fw.print("\x1b[{s}", .{switch (d) {
                 .red => "31m",
                 .bred => "91m",
                 .green => "32m",
@@ -33,10 +33,12 @@ pub fn printDecorated(fw: *std.Io.Writer, decorate: bool, decor: []const Decorat
                 .bold => "1m",
                 .underline => "4m",
                 .italic => "3m",
-            }}) catch return;
+            }});
         }
     }
 
-    fw.print(fmt, args) catch return;
-    fw.writeAll("\x1b[0m") catch return;
+    try fw.print(fmt, args);
+
+    if (decorate)
+        try fw.writeAll("\x1b[0m");
 }

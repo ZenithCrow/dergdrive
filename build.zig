@@ -21,13 +21,13 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    const net_mod = b.dependency("znetw", .{
-        .target = target,
-        .optimize = optimize,
-    }).module("znetw");
+    // const net_mod = b.dependency("znetw", .{
+    //     .target = target,
+    //     .optimize = optimize,
+    // }).module("znetw");
 
-    mod.addImport("znetw", net_mod);
-    exe_mod.addImport("znetw", net_mod);
+    // mod.addImport("znetw", net_mod);
+    // exe_mod.addImport("znetw", net_mod);
 
     const exe = b.addExecutable(.{
         .name = "dergdrive",

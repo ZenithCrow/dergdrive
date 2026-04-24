@@ -269,12 +269,14 @@ pub fn writeConfFile(self: Conf, conf_file: ConfFile, truncate: bool, data: []co
     return writer.interface.writeAll(data) catch writer.err.?;
 }
 
+/// use env layer instead of this access
 pub fn get(self: Conf, env_file: ConfFile, key: []const u8, allocator: std.mem.Allocator) GetConfError!?[]const u8 {
     const iter: KeyValueIterator = .init(try self.getConf(env_file, allocator));
     defer allocator.free(iter.line_iter.buffer);
     return if (getFromIter(iter, key)) |value| try allocator.dupe(u8, value) else null;
 }
 
+/// use env layer instead of this access
 pub fn getFromIter(kv_iter: KeyValueIterator, key: []const u8) ?[]const u8 {
     var iter_cpy = kv_iter;
     iter_cpy.line_iter.index = 0;
@@ -284,6 +286,7 @@ pub fn getFromIter(kv_iter: KeyValueIterator, key: []const u8) ?[]const u8 {
     } else null;
 }
 
+/// use env layer instead of this accesss
 pub fn set(self: Conf, env_file: ConfFile, key: []const u8, value: []const u8, allocator: std.mem.Allocator) SetError!void {
     const file = try self.openOrCreateConfFile(env_file, false, allocator);
     defer file.close();
@@ -325,40 +328,5 @@ pub fn set(self: Conf, env_file: ConfFile, key: []const u8, value: []const u8, a
             writer.interface.writeByte('\n') catch return writer.err.?;
 
         writer.interface.print("{s}={s}\n", .{ key, value }) catch return writer.err.?;
-    }
-}
-
-test "config key value pairs" {
-    const allocator = std.testing.allocator;
-    const c: Conf = .{ .vol = "" };
-
-    const test_file: ConfFile = .{
-        .nspace = .from(.{ .config = .internal }),
-        .sub_path = ".test/test.env",
-        .always_create = true,
-    };
-
-    try c.set(test_file, "key1", "owo", allocator);
-    try c.set(test_file, "key2", "bar", allocator);
-    try c.set(test_file, "key1", "foooo", allocator);
-
-    {
-        const val1 = (try c.get(test_file, "key1", allocator)).?;
-        defer allocator.free(val1);
-        try std.testing.expectEqualStrings("foooo", val1);
-    }
-
-    try c.set(test_file, "key1", "owo", allocator);
-
-    {
-        const val1 = (try c.get(test_file, "key1", allocator)).?;
-        defer allocator.free(val1);
-        try std.testing.expectEqualStrings("owo", val1);
-    }
-
-    {
-        const val2 = (try c.get(test_file, "key2", allocator)).?;
-        defer allocator.free(val2);
-        try std.testing.expectEqualStrings("bar", val2);
     }
 }

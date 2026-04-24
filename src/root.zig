@@ -50,6 +50,10 @@ pub const proto = struct {
     };
 };
 
+pub const util = struct {
+    pub const sort = @import("util/sort.zig");
+};
+
 test {
     std.testing.refAllDeclsRecursive(@This());
 }

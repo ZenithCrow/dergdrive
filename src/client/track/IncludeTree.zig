@@ -1,4 +1,5 @@
 const std = @import("std");
+const dergdrive = @import("dergdrive");
 const expect = std.testing.expect;
 
 const IncludeTree = @This();
@@ -134,10 +135,9 @@ test "swap slices" {
 
 pub const TreeIterator = struct {
     include_all: bool = false,
-    tree: IncludeTree,
+    tree: @FieldType(@FieldType(IncludeTree, "flat_tree"), "tree"),
     index: usize = 0,
     level_stack: std.ArrayList(LevelledNodesIterator) = .empty,
-    excluded_files: std.hash_map.StringHashMapUnmanaged(usize) = .empty,
     level: usize = 1,
     allocator: std.mem.Allocator,
 
@@ -214,30 +214,20 @@ pub const TreeIterator = struct {
         self.level = 1;
         self.level_stack.shrinkRetainingCapacity(0);
     }
-
-    /// To load the excluded path into a map, this function depletes the iterator. Call `reset` to go back to the initial state of the iterator.
-    pub fn initExcludes(self: *TreeIterator) std.mem.Allocator.Error!void {
-        while (try self.nextNodeLevel()) |res| {
-            if (levelIsIgnore(res.level))
-                try self.excluded_files.putNoClobber(self.allocator, res.node.path(), self.index - 1);
-        }
-    }
-
     pub fn deinit(self: *TreeIterator) void {
         self.level_stack.deinit(self.allocator);
-        self.excluded_files.deinit(self.allocator);
     }
 
     pub fn iterateLevelled(self: TreeIterator, node_idx: usize) ?LevelledNodesIterator {
-        return switch (self.tree.flat_tree.items[node_idx]) {
+        return switch (self.tree.items[node_idx]) {
             .file => null,
-            .dir => |dir| .{ .flat_tree = self.tree.flat_tree.items[node_idx + 1 .. node_idx + 1 + dir.flat_breadth] },
+            .dir => |dir| .{ .flat_tree = self.tree.items[node_idx + 1 .. node_idx + 1 + dir.flat_breadth] },
         };
     }
 
     pub fn iterateLevelledFromConsumedNode(self: TreeIterator) ?LevelledNodesIterator {
         if (self.index == 0)
-            return .{ .flat_tree = self.tree.flat_tree.items };
+            return .{ .flat_tree = self.tree.items };
 
         return self.iterateLevelled(self.index - 1);
     }
@@ -262,30 +252,9 @@ pub const TreeIterator = struct {
         hmap.sort(struct {
             self: *@TypeOf(hmap),
 
-            fn @"human -- ehm well derg- naturalCharLessThan"(a: u8, b: u8) std.math.Order {
-                const al = std.ascii.toLower(a);
-                const bl = std.ascii.toLower(b);
-                return if (al != bl) std.math.order(al, bl) else std.math.order(a, b);
-            }
-
-            fn humanStringLessThan(lhs_p: []const u8, rhs_p: []const u8) bool {
-                const lhs = if (lhs_p.len > 1 and lhs_p[0] == '.') lhs_p[1..] else lhs_p;
-                const rhs = if (rhs_p.len > 1 and rhs_p[0] == '.') rhs_p[1..] else rhs_p;
-
-                const n = @min(lhs.len, rhs.len);
-                for (lhs[0..n], rhs[0..n]) |lhs_elem, rhs_elem| {
-                    switch (@"human -- ehm well derg- naturalCharLessThan"(lhs_elem, rhs_elem)) {
-                        .eq => continue,
-                        .lt => return true,
-                        .gt => return false,
-                    }
-                }
-                return std.math.order(lhs.len, rhs.len) == .lt;
-            }
-
             pub fn lessThan(ctx: @This(), a_i: usize, b_i: usize) bool {
                 const keys = ctx.self.keys();
-                return humanStringLessThan(keys[a_i], keys[b_i]);
+                return dergdrive.util.sort.humanStringLessThan(keys[a_i], keys[b_i]);
             }
         }{ .self = &hmap });
 
@@ -303,7 +272,7 @@ pub const TreeIterator = struct {
 
     /// asserts node at index is a dir
     pub fn levelEmpty(self: TreeIterator, node_idx: usize) bool {
-        return switch (self.tree.flat_tree.items[node_idx]) {
+        return switch (self.tree.items[node_idx]) {
             .file => unreachable,
             .dir => |dir| dir.flat_breadth == 0,
         };
@@ -315,7 +284,7 @@ pub const TreeIterator = struct {
     };
 
     pub fn peekNode(self: TreeIterator) ?TreeNode {
-        return if (self.index < self.tree.flat_tree.items.len) self.tree.flat_tree.items[self.index] else null;
+        return if (self.index < self.tree.items.len) self.tree.items[self.index] else null;
     }
 
     //  TODO: make this same as nextNodeLevel but without advancing the iterator
@@ -375,7 +344,10 @@ pub const TreeIterator = struct {
 
 const capacity_exp = 16;
 
-flat_tree: std.ArrayList(TreeNode) = .empty,
+flat_tree: union(enum) {
+    tree: std.ArrayList(TreeNode),
+    map: std.StringArrayHashMapUnmanaged(usize),
+} = .{ .tree = .empty },
 allocator: std.mem.Allocator,
 root_dir: std.fs.Dir,
 rules: RuleIterator,
@@ -385,26 +357,51 @@ pub fn init(root_dir: std.fs.Dir, rule_text: []const u8, allocator: std.mem.Allo
 }
 
 pub fn deinit(self: *IncludeTree) void {
-    for (self.flat_tree.items) |item| {
-        switch (item) {
-            .file => |file_name| self.allocator.free(file_name),
-            .dir => |dir| self.allocator.free(dir.name),
-        }
-    }
+    switch (self.flat_tree) {
+        .tree => |*tree| {
+            for (tree.items) |item| {
+                switch (item) {
+                    .file => |file_name| self.allocator.free(file_name),
+                    .dir => |dir| self.allocator.free(dir.name),
+                }
+            }
 
-    self.flat_tree.deinit(self.allocator);
+            tree.deinit(self.allocator);
+        },
+        .map => |*map| {
+            for (map.keys()) |key| {
+                self.allocator.free(key);
+            }
+
+            map.deinit(self.allocator);
+        },
+    }
 }
 
 pub fn buildTree(self: *IncludeTree) IterateDirError!void {
+    self.flat_tree = .{ .tree = .empty };
     const nodes = try self.iterateDir(self.root_dir, self.rules, 1, "");
-    std.debug.assert(nodes == self.flat_tree.items.len);
+    std.debug.assert(nodes == self.flat_tree.tree.items.len);
 }
 
 pub fn iterateTree(self: IncludeTree, allocator: std.mem.Allocator) TreeIterator {
-    return .{ .tree = self, .allocator = allocator };
+    return .{ .tree = self.flat_tree.tree, .allocator = allocator };
 }
 
-pub fn sort(self: IncludeTree) std.mem.Allocator.Error!void {
+pub fn buildMap(self: *IncludeTree) IterateDirError!void {
+    self.flat_tree = .{ .map = .empty };
+    const nodes = try self.iterateDir(self.root_dir, self.rules, 1, "");
+    std.debug.assert(nodes == self.flat_tree.map.count());
+}
+
+pub fn sort(self: *IncludeTree) std.mem.Allocator.Error!void {
+    switch (self.flat_tree) {
+        .tree => try self.sortTree(),
+        .map => self.sortMap(),
+    }
+}
+
+fn sortTree(self: IncludeTree) std.mem.Allocator.Error!void {
     var tree_iter = self.iterateTree(self.allocator);
     defer tree_iter.deinit();
     try tree_iter.sortLevelFromConsumedNode();
@@ -414,12 +411,30 @@ pub fn sort(self: IncludeTree) std.mem.Allocator.Error!void {
     }
 }
 
-fn addNode(self: *IncludeTree, node: TreeNode) std.mem.Allocator.Error!usize {
-    if (self.flat_tree.items.len == self.flat_tree.capacity)
-        try self.flat_tree.ensureTotalCapacity(self.allocator, self.flat_tree.capacity + capacity_exp);
+fn sortMap(self: *IncludeTree) void {
+    self.flat_tree.map.sort(struct {
+        map: *const @TypeOf(self.flat_tree.map),
 
-    self.flat_tree.appendAssumeCapacity(node);
-    return self.flat_tree.items.len - 1;
+        pub inline fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
+            const keys = ctx.map.keys();
+            return dergdrive.util.sort.humanStringLessThan(keys[a_index], keys[b_index]);
+        }
+    }{ .map = &self.flat_tree.map });
+}
+
+fn addTreeNode(self: *IncludeTree, node: TreeNode) std.mem.Allocator.Error!usize {
+    if (self.flat_tree.tree.items.len == self.flat_tree.tree.capacity)
+        try self.flat_tree.tree.ensureTotalCapacity(self.allocator, self.flat_tree.tree.capacity + capacity_exp);
+
+    self.flat_tree.tree.appendAssumeCapacity(node);
+    return self.flat_tree.tree.items.len - 1;
+}
+
+fn addMapNode(self: *IncludeTree, path: []const u8, level: usize) std.mem.Allocator.Error!void {
+    if (self.flat_tree.map.count() == self.flat_tree.map.capacity())
+        try self.flat_tree.map.ensureTotalCapacity(self.allocator, self.flat_tree.map.capacity() + capacity_exp);
+
+    self.flat_tree.map.putAssumeCapacityNoClobber(path, level);
 }
 
 fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, level: usize, path: []const u8) IterateDirError!usize {
@@ -462,12 +477,15 @@ fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, leve
             if (ignore(rule_match) == levelIsIgnore(level)) {
                 node_added = true;
 
-                switch (entry.kind) {
-                    .file => _ = try self.addNode(.{ .file = full_path.transferOwnership() }),
-                    .directory => node_index = try self.addNode(.{ .dir = .{ .name = full_path.transferOwnership(), .flat_breadth = 0 } }),
-                    else => {
-                        //  TODO: handle symlinks
-                        node_added = false;
+                switch (self.flat_tree) {
+                    .map => try self.addMapNode(full_path.transferOwnership(), level),
+                    .tree => switch (entry.kind) {
+                        .file => _ = try self.addTreeNode(.{ .file = full_path.transferOwnership() }),
+                        .directory => node_index = try self.addTreeNode(.{ .dir = .{ .name = full_path.transferOwnership(), .flat_breadth = 0 } }),
+                        else => {
+                            //  TODO: handle symlinks
+                            node_added = false;
+                        },
                     },
                 }
 
@@ -485,10 +503,12 @@ fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, leve
                 const child_iter = if (node_added) match_iter.rules else rule_iter;
                 const child_dir_nodes = try self.iterateDir(child_dir, child_iter, level + level_inc, full_path.path);
 
-                if (node_index) |index| {
-                    switch (self.flat_tree.items[index]) {
-                        .dir => |*dir_node| dir_node.flat_breadth += child_dir_nodes,
-                        else => unreachable,
+                if (self.flat_tree == .tree) {
+                    if (node_index) |index| {
+                        switch (self.flat_tree.tree.items[index]) {
+                            .dir => |*dir_node| dir_node.flat_breadth += child_dir_nodes,
+                            else => unreachable,
+                        }
                     }
                 }
 

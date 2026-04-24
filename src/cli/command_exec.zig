@@ -104,7 +104,7 @@ fn printOptionEvenlySpaced(w: *std.Io.Writer, option: Option) std.Io.Writer.Erro
     try printEvenlySpaced(w, fw.buffered(), option.desc);
 }
 
-const param_notice = "Parameters in capitals are user provided. If enclosed in brackets [], the parameter is optional or has a default value.";
+const param_notice = "Parameters in capitals are user provided. If enclosed in brackets [], the parameter is optional and/or has a default value.";
 
 pub fn printHelp() void {
     std.log.info(param_notice, .{});
@@ -125,7 +125,7 @@ pub fn printHelp() void {
 
     stderr_w.interface.print(
         \\
-        \\Global options:
+        \\Global command options:
         \\
         \\
     ,
@@ -182,7 +182,7 @@ pub fn printCmdHelp(cmd: Command) void {
 
     stderr_w.interface.print(
         \\
-        \\Global options:
+        \\Global command options:
         \\
         \\
     ,
