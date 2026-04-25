@@ -33,8 +33,8 @@ pub const command: cli.Command = .{
         include_rules_opt.option,
         root_dir_opt.option,
         mode_opt,
-        hide_include_opt,
-        hide_ignore_opt,
+        only_include_opt,
+        only_ignore_opt,
         list_ignore_opt,
     },
 };
@@ -50,22 +50,22 @@ const mode_opt: cli.Option = .{
     },
 };
 
-const hide_include_opt: cli.Option = .{
+const only_include_opt: cli.Option = .{
     .long = "--hide-include",
     .short = 'c',
-    .desc = "Don't show included files in traverse mode",
+    .desc = "Only show included files in traverse mode",
 };
 
-const hide_ignore_opt: cli.Option = .{
+const only_ignore_opt: cli.Option = .{
     .long = "--hide-ignore",
     .short = 'g',
-    .desc = "Don't show ignored files in traverse mode",
+    .desc = "Only show ignored files in traverse mode",
 };
 
 const list_ignore_opt: cli.Option = .{
     .long = "--list-ignore",
     .short = 'l',
-    .desc = "List directories whose contents are all ignored",
+    .desc = "Traverse and list directories whose contents are all ignored",
 };
 
 const Mode = enum {
@@ -174,8 +174,8 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
                     iter: *const IncludeTree,
                     level_stack: *std.ArrayList(bool),
                     decorate: bool,
-                    hide_include: bool,
-                    hide_ignore: bool,
+                    only_include: bool,
+                    only_ignore: bool,
                     list_ignore: bool,
                     writer: *std.Io.Writer,
                     allocator: std.mem.Allocator,
@@ -205,7 +205,7 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
                                 const map_include: ?bool = if (ipt_ctx.iter.flat_tree.map.get(full_path)) |item_lvl| !IncludeTree.levelIsIgnore(item_lvl) else null;
                                 const is_included = if (map_include) |m| m else IncludeTree.levelIsIgnore(level);
 
-                                if (is_included and ipt_ctx.hide_include or !is_included and ipt_ctx.hide_ignore) {
+                                if (!is_included and ipt_ctx.only_include or is_included and ipt_ctx.only_ignore) {
                                     ipt_ctx.allocator.free(full_path);
                                     continue;
                                 }
@@ -284,10 +284,10 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
                 }
             };
 
-            const hide_include = cli.parser.indexOfOption(args, hide_include_opt.long, hide_include_opt.short) != null;
-            const hide_ignore = cli.parser.indexOfOption(args, hide_ignore_opt.long, hide_ignore_opt.short) != null;
+            const only_include = cli.parser.indexOfOption(args, only_include_opt.long, only_include_opt.short) != null;
+            const only_ignore = cli.parser.indexOfOption(args, only_ignore_opt.long, only_ignore_opt.short) != null;
 
-            if (hide_include and hide_ignore) {
+            if (only_include and only_ignore) {
                 log.info("Nothing to show.", .{});
                 break :sw;
             }
@@ -306,8 +306,8 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
                 .iter = &tree,
                 .level_stack = &level_stack,
                 .decorate = decorate,
-                .hide_include = hide_include,
-                .hide_ignore = hide_ignore,
+                .only_include = only_include,
+                .only_ignore = only_ignore,
                 .list_ignore = cli.parser.indexOfOption(args, list_ignore_opt.long, list_ignore_opt.short) != null,
                 .writer = &stdout_w.interface,
                 .allocator = allocator,
