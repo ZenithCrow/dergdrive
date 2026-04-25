@@ -73,7 +73,7 @@ const pipe_file_error_notice = "Failed to pipe file \"{s}\" due to error: {t}.";
 const open_dir_error_notice = "Couldn't open directory \"{s}\" due to error {t}.";
 const dir_transaction_error_notice = "Transaction of directory \"{s}\" is only partially successful.";
 
-/// dir has to be opened with iterate flags
+/// if not null, `dir` must be opened with iterate flag
 fn pipeDir(self: *FileReader, dir: Dir) PipeDirError!void {
     var has_error: bool = false;
     var dir_iter = dir.iterate();
@@ -129,7 +129,7 @@ fn unitIsFile(comptime UT: type) bool {
     };
 }
 
-/// if unit is dir, it has to be opened with with iterate flags
+/// if `unit` is dir and is not null, it must to be opened with with iterate flag
 fn syncUnit(
     self: *FileReader,
     subpath: []const u8,
@@ -250,6 +250,7 @@ pub inline fn syncFile(
     try self.syncUnit(subpath, file, sync_op, mfest_records, allocator);
 }
 
+/// if not null, `dir` must be open with iterate flag
 pub inline fn syncDir(
     self: *FileReader,
     subpath: []const u8,

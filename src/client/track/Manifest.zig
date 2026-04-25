@@ -189,7 +189,7 @@ pub fn loadLocalPrefixOverrides(self: *Manifest) LoadLocalPrefixOverridesError!v
     var iter: Conf.KeyValueIterator = .init(buf);
     while (iter.next()) |kv| {
         if (kv.key.len == 0) {
-            log.warn("Couldn't parse prefix from empty key", .{});
+            log.warn("Couldn't parse prefix from empty key.", .{});
             continue;
         }
 

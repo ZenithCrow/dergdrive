@@ -190,7 +190,8 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
                         is_included: bool,
 
                         pub fn getEntryName(self: @This()) []const u8 {
-                            return if (std.mem.lastIndexOfScalar(u8, self.full_path, '/')) |idx| self.full_path[idx + 1 ..] else self.full_path;
+                            const fp = IncludeTree.FlatMap.origPath(self.full_path);
+                            return if (std.mem.lastIndexOfScalar(u8, fp, '/')) |idx| fp[idx + 1 ..] else fp;
                         }
                     };
 
@@ -200,9 +201,9 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
                     while (try iterator.next()) |entry| {
                         switch (entry.kind) {
                             .directory, .file => |k| {
-                                const full_path = if (path.len != 0) try std.mem.join(ipt_ctx.allocator, "/", &.{ path, entry.name }) else try ipt_ctx.allocator.dupe(u8, entry.name);
+                                const full_path = if (path.len != 0) try std.mem.join(ipt_ctx.allocator, "/", if (k == .file) &.{ path, entry.name } else &.{ path, entry.name, "" }) else try ipt_ctx.allocator.dupe(u8, entry.name);
 
-                                const map_include: ?bool = if (ipt_ctx.iter.flat_tree.map.get(full_path)) |item_lvl| !IncludeTree.levelIsIgnore(item_lvl) else null;
+                                const map_include: ?bool = if (ipt_ctx.iter.flat_tree.map.m.get(full_path)) |item_lvl| !IncludeTree.levelIsIgnore(item_lvl) else null;
                                 const is_included = if (map_include) |m| m else IncludeTree.levelIsIgnore(level);
 
                                 if (!is_included and ipt_ctx.only_include or is_included and ipt_ctx.only_ignore) {
@@ -254,7 +255,7 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
                         const entry_name = item.getEntryName();
                         try cli.termfmt.printDecorated(ipt_ctx.writer, ipt_ctx.decorate, item_decor, "{s}\n", .{entry_name});
 
-                        const lvl_empty = if (ipt_ctx.list_ignore or IncludeTree.levelIsIgnore(level)) false else std.sort.binarySearch([]const u8, ipt_ctx.iter.flat_tree.map.keys(), item.full_path, struct {
+                        const lvl_empty = if (ipt_ctx.list_ignore or IncludeTree.levelIsIgnore(level)) false else std.sort.binarySearch([]const u8, ipt_ctx.iter.flat_tree.map.m.keys(), item.full_path, struct {
                             pub fn compareFn(p: []const u8, elem: []const u8) std.math.Order {
                                 if (std.mem.startsWith(u8, elem, p))
                                     return .eq;
@@ -298,6 +299,10 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
             };
 
             tree.sort() catch unreachable;
+
+            for (tree.flat_tree.map.m.keys()) |key| {
+                std.log.info("{s}", .{key});
+            }
 
             var level_stack: std.ArrayList(bool) = .empty;
             defer level_stack.deinit(allocator);

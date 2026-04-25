@@ -344,9 +344,22 @@ pub const TreeIterator = struct {
 
 const capacity_exp = 16;
 
+pub const FlatMap = struct {
+    m: std.StringArrayHashMapUnmanaged(usize),
+
+    // in map mode, directories are encoded with a slash at the end of their path
+    pub fn isDir(path: []const u8) bool {
+        return path.len > 0 and path[path.len - 1] == '/';
+    }
+
+    pub fn origPath(path: []const u8) []const u8 {
+        return if (isDir(path)) path[0 .. path.len - 1] else path;
+    }
+};
+
 flat_tree: union(enum) {
     tree: std.ArrayList(TreeNode),
-    map: std.StringArrayHashMapUnmanaged(usize),
+    map: FlatMap,
 } = .{ .tree = .empty },
 allocator: std.mem.Allocator,
 root_dir: std.fs.Dir,
@@ -369,11 +382,11 @@ pub fn deinit(self: *IncludeTree) void {
             tree.deinit(self.allocator);
         },
         .map => |*map| {
-            for (map.keys()) |key| {
+            for (map.m.keys()) |key| {
                 self.allocator.free(key);
             }
 
-            map.deinit(self.allocator);
+            map.m.deinit(self.allocator);
         },
     }
 }
@@ -389,9 +402,9 @@ pub fn iterateTree(self: IncludeTree, allocator: std.mem.Allocator) TreeIterator
 }
 
 pub fn buildMap(self: *IncludeTree) IterateDirError!void {
-    self.flat_tree = .{ .map = .empty };
+    self.flat_tree = .{ .map = .{ .m = .empty } };
     const nodes = try self.iterateDir(self.root_dir, self.rules, 1, "");
-    std.debug.assert(nodes == self.flat_tree.map.count());
+    std.debug.assert(nodes == self.flat_tree.map.m.count());
 }
 
 pub fn sort(self: *IncludeTree) std.mem.Allocator.Error!void {
@@ -412,11 +425,11 @@ fn sortTree(self: IncludeTree) std.mem.Allocator.Error!void {
 }
 
 fn sortMap(self: *IncludeTree) void {
-    self.flat_tree.map.sort(struct {
+    self.flat_tree.map.m.sort(struct {
         map: *const @TypeOf(self.flat_tree.map),
 
         pub inline fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
-            const keys = ctx.map.keys();
+            const keys = ctx.map.m.keys();
             return dergdrive.util.sort.humanStringLessThan(keys[a_index], keys[b_index]);
         }
     }{ .map = &self.flat_tree.map });
@@ -431,17 +444,20 @@ fn addTreeNode(self: *IncludeTree, node: TreeNode) std.mem.Allocator.Error!usize
 }
 
 fn addMapNode(self: *IncludeTree, path: []const u8, level: usize) std.mem.Allocator.Error!void {
-    if (self.flat_tree.map.count() == self.flat_tree.map.capacity())
-        try self.flat_tree.map.ensureTotalCapacity(self.allocator, self.flat_tree.map.capacity() + capacity_exp);
+    if (self.flat_tree.map.m.count() == self.flat_tree.map.m.capacity())
+        try self.flat_tree.map.m.ensureTotalCapacity(self.allocator, self.flat_tree.map.m.capacity() + capacity_exp);
 
-    self.flat_tree.map.putAssumeCapacityNoClobber(path, level);
+    self.flat_tree.map.m.putAssumeCapacityNoClobber(path, level);
 }
 
 fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, level: usize, path: []const u8) IterateDirError!usize {
     var num_nodes_added: usize = 0;
     var iter = dir.iterate();
     while (try iter.next()) |entry| {
-        const path_chunks: []const []const u8 = if (path.len == 0) &.{entry.name} else &.{ path, entry.name };
+        const path_chunks = [_][]const u8{ path, entry.name, "" };
+        const use_chunks: usize = if (self.flat_tree == .map and entry.kind == .directory) 3 else 2;
+
+        log.info("use: {d}", .{use_chunks});
 
         const FullPath = struct {
             const FullPath = @This();
@@ -459,14 +475,19 @@ fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, leve
                 fp.owned = false;
                 return fp.path;
             }
+
+            pub inline fn origPath(fp: FullPath) []const u8 {
+                return FlatMap.origPath(fp.path);
+            }
         };
 
-        var full_path: FullPath = .{ .path = try std.mem.join(self.allocator, "/", path_chunks), .allocator = self.allocator };
+        var full_path: FullPath = .{ .path = try std.mem.join(self.allocator, "/", if (path.len == 0) &.{entry.name} else path_chunks[0..use_chunks]), .allocator = self.allocator };
         defer full_path.deinit();
 
-        // log.debug("full_path: {s}", .{full_path.path});
+        log.debug("full_path: {s}", .{full_path.path});
+        log.debug("orig_path: {s}", .{full_path.origPath()});
 
-        var match_iter: MatchIterator = .init(full_path.path, entry.kind == .directory, rule_iter);
+        var match_iter: MatchIterator = .init(full_path.origPath(), entry.kind == .directory, rule_iter);
         const prio_rule: ?[]const u8 = match_iter.findLastMatch();
 
         // if (prio_rule) |rule| log.debug("matched rule: {s}", .{rule});
@@ -478,7 +499,12 @@ fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, leve
                 node_added = true;
 
                 switch (self.flat_tree) {
-                    .map => try self.addMapNode(full_path.transferOwnership(), level),
+                    .map => {
+                        const fp = full_path.transferOwnership();
+                        log.info("full_path: {s}", .{fp});
+
+                        try self.addMapNode(fp, level);
+                    },
                     .tree => switch (entry.kind) {
                         .file => _ = try self.addTreeNode(.{ .file = full_path.transferOwnership() }),
                         .directory => node_index = try self.addTreeNode(.{ .dir = .{ .name = full_path.transferOwnership(), .flat_breadth = 0 } }),
@@ -496,12 +522,12 @@ fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, leve
 
         if (entry.kind == .directory) {
             const level_inc: usize = if (node_added) 1 else 0;
-            if (searchForChildRules(full_path.path, match_iter.rules, level + level_inc)) {
+            if (searchForChildRules(full_path.origPath(), match_iter.rules, level + level_inc)) {
                 var child_dir = try dir.openDir(entry.name, .{ .iterate = true });
                 defer child_dir.close();
 
                 const child_iter = if (node_added) match_iter.rules else rule_iter;
-                const child_dir_nodes = try self.iterateDir(child_dir, child_iter, level + level_inc, full_path.path);
+                const child_dir_nodes = try self.iterateDir(child_dir, child_iter, level + level_inc, full_path.origPath());
 
                 if (self.flat_tree == .tree) {
                     if (node_index) |index| {
