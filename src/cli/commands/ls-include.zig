@@ -75,7 +75,7 @@ const Mode = enum {
 
 inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !void {
     const ctx = try cli.command_exec.initBroadContext(args, allocator);
-    defer cli.command_exec.deinitBroadContext();
+    defer ctx.deinitBroadContext(allocator);
 
     const root_path = if (ctx.root_path) |v| v else {
         log.err(cli.Option.opt_not_set_template, .{ "Root directory", root_dir_opt.root_dir_opt_name, root_dir_opt.option.long });
@@ -93,7 +93,7 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
     };
     defer root_dir.close();
 
-    const cwd = if (try Env.g_env.getWithCwd(include_rules_opt.include_rules_opt_name, false)) |val| val.cwd else std.fs.cwd();
+    const cwd = if (try ctx.env.getWithCwd(include_rules_opt.include_rules_opt_name, false)) |val| val.cwd else std.fs.cwd();
 
     const rule_text = blk: {
         const rule_file = cwd.openFile(include_rules_path, .{}) catch |err| {

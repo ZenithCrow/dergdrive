@@ -196,28 +196,52 @@ pub fn printCmdHelp(cmd: Command) void {
     stderr_w.interface.flush() catch {};
 }
 
-pub const Context = struct {
+pub const ParamContext = struct {
+    conf: *dergdrive.conf.Conf,
+    env: *dergdrive.conf.Env,
     vol: ?[]const u8 = null,
     root_path: ?[]const u8 = null,
     include_rules_path: ?[]const u8 = null,
+
+    pub fn deinitBroadContext(self: ParamContext, allocator: std.mem.Allocator) void {
+        allocator.destroy(self.conf);
+
+        self.env.deinit();
+        allocator.destroy(self.env);
+    }
 };
 
-pub fn initBroadContext(args: []const []const u8, allocator: std.mem.Allocator) dergdrive.cli.Command.ExecError!Context {
-    dergdrive.conf.Conf.initGlobal("");
-    var env: dergdrive.conf.Env = .init(dergdrive.conf.Conf.g_conf, allocator);
+const load_evs_err_notice = "Failed to load envs due to error: {t}.";
 
-    const load_evs_err_notice = "Failed to load envs due to error: {t}.";
+pub fn initBroadContext(args: []const []const u8, allocator: std.mem.Allocator) dergdrive.cli.Command.ExecError!ParamContext {
+    const conf = allocator.create(dergdrive.conf.Conf) catch |err| {
+        log.err(load_evs_err_notice, .{err});
+        return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
+    };
+    errdefer allocator.destroy(conf);
+
+    conf.* = .init("");
+
+    const env = allocator.create(dergdrive.conf.Env) catch |err| {
+        log.err(load_evs_err_notice, .{err});
+        return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
+    };
+    errdefer allocator.destroy(env);
+
+    env.* = .init(conf.*, allocator);
+    errdefer env.deinit();
+
     env.loadEnvs() catch |err| {
         log.err(load_evs_err_notice, .{err});
         return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
     };
 
     const vol = if (getCliThenConfigValue(env, vol_opt.default_vol_opt_name, args, vol_opt.option)) |v| blk: {
-        dergdrive.conf.Conf.initGlobal(v);
+        conf.* = .init(v);
 
         // replace env with newer one having volume context
         env.deinit();
-        env = .init(dergdrive.conf.Conf.g_conf, allocator);
+        env.* = .init(dergdrive.conf.Conf.g_conf, allocator);
         env.loadEnvs() catch |err| {
             log.err(load_evs_err_notice, .{err});
             return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
@@ -226,19 +250,15 @@ pub fn initBroadContext(args: []const []const u8, allocator: std.mem.Allocator) 
         break :blk v;
     } else null;
 
-    dergdrive.conf.Env.g_env = env;
-
     return .{
+        .conf = conf,
+        .env = env,
         .vol = vol,
         .root_path = getCliThenConfigValue(env, @"root-dir_opt".root_dir_opt_name, args, @"root-dir_opt".option),
         .include_rules_path = getCliThenConfigValue(env, @"include-rules_opt".include_rules_opt_name, args, @"include-rules_opt".option),
     };
 }
 
-pub fn deinitBroadContext() void {
-    dergdrive.conf.Env.deinitGlobal();
-}
-
-pub fn getCliThenConfigValue(env: dergdrive.conf.Env, config_opt_name: []const u8, args: []const []const u8, cli_opt: Option) ?[]const u8 {
+pub fn getCliThenConfigValue(env: *const dergdrive.conf.Env, config_opt_name: []const u8, args: []const []const u8, cli_opt: Option) ?[]const u8 {
     return if (parser.getAssociatedValue(args, cli_opt.long, cli_opt.short, (cli_opt.value orelse return null).eql_sign)) |v| v else if (env.get(config_opt_name)) |v| v else null;
 }

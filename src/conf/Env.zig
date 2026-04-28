@@ -45,8 +45,6 @@ const ConfFileContext = struct {
     }
 };
 
-pub var g_env: Env = undefined;
-
 env_registry: std.StringArrayHashMap(EnvValue),
 modified_envs: std.ArrayHashMap(Conf.ConfFile, void, ConfFileContext, true),
 allocator: std.mem.Allocator,
@@ -61,10 +59,6 @@ pub fn init(conf: Conf, allocator: std.mem.Allocator) Env {
     };
 }
 
-pub fn initGlobal(conf: Conf, allocator: std.mem.Allocator) void {
-    g_env = init(conf, allocator);
-}
-
 pub fn deinit(self: *Env) void {
     var iter = self.env_registry.iterator();
     while (iter.next()) |kv| {
@@ -74,10 +68,6 @@ pub fn deinit(self: *Env) void {
 
     self.env_registry.deinit();
     self.modified_envs.deinit();
-}
-
-pub fn deinitGlobal() void {
-    g_env.deinit();
 }
 
 pub fn loadEnvs(self: *Env) std.mem.Allocator.Error!void {

@@ -185,8 +185,8 @@ oride_prefixes: ConfFile = g_oride_prefixes,
 
 vol: []const u8,
 
-pub fn initGlobal(vol: []const u8) void {
-    g_conf = .{ .vol = vol };
+pub fn init(vol: []const u8) Conf {
+    return .{ .vol = vol };
 }
 
 pub fn expand(self: Conf, path: []const u8, allocator: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
