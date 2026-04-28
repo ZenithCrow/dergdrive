@@ -53,7 +53,6 @@ const FileRecordHashMap = std.ArrayHashMap(FileRecordKey, FileRecord, FileRecord
 
 file_records: FileRecordHashMap,
 sorted: bool = false,
-w_lock: Mutex = .{},
 
 pub fn init(allocator: std.mem.Allocator) FileRecordMap {
     return .{
@@ -62,9 +61,6 @@ pub fn init(allocator: std.mem.Allocator) FileRecordMap {
 }
 
 pub fn deinit(self: *FileRecordMap) void {
-    self.w_lock.lock();
-    defer self.w_lock.unlock();
-
     for (self.file_records.keys()) |key| {
         if (key.owned)
             self.file_records.allocator.free(key.key);
@@ -73,25 +69,16 @@ pub fn deinit(self: *FileRecordMap) void {
 }
 
 pub inline fn clear(self: *FileRecordMap) void {
-    self.w_lock.lock();
-    defer self.w_lock.unlock();
-
     self.file_records.clearRetainingCapacity();
     self.sorted = false;
 }
 
 pub inline fn put(self: *FileRecordMap, key: FileRecordKey, val: FileRecord) std.mem.Allocator.Error!void {
-    self.w_lock.lock();
-    defer self.w_lock.unlock();
-
     try self.file_records.put(key, val);
     self.sorted = false;
 }
 
 pub fn sort(self: *FileRecordMap) void {
-    self.w_lock.lock();
-    defer self.w_lock.unlock();
-
     self.file_records.sort(struct {
         self: *FileRecordHashMap,
 
@@ -102,17 +89,11 @@ pub fn sort(self: *FileRecordMap) void {
     }{ .self = &self.file_records });
 }
 
-pub fn getDirRange(self: *FileRecordMap, dir_path: []const u8) struct { usize, usize } {
-    self.w_lock.lock();
-    defer self.w_lock.unlock();
+pub fn sortedMapGetDirRangeBounded(self: FileRecordMap, dir_path: []const u8, bounds: struct { usize, usize }) struct { usize, usize } {
+    if (dir_path.len == 0)
+        return .{ 0, self.file_records.keys().len };
 
-    if (!self.sorted) {
-        self.w_lock.unlock();
-        self.sort();
-        self.w_lock.lock();
-    }
-
-    return std.sort.equalRange(FileRecordKey, self.file_records.keys(), dir_path, struct {
+    return std.sort.equalRange(FileRecordKey, self.file_records.keys()[bounds.@"0"..bounds.@"1"], dir_path, struct {
         pub fn compareFn(context: []const u8, item: FileRecordKey) std.math.Order {
             if (std.mem.startsWith(u8, item.key, context))
                 return std.math.Order.eq;
@@ -122,10 +103,69 @@ pub fn getDirRange(self: *FileRecordMap, dir_path: []const u8) struct { usize, u
     }.compareFn);
 }
 
-pub fn getDir(self: *FileRecordMap, dir_path: []const u8) []FileRecord {
-    const range = self.getDirRange(dir_path);
+pub inline fn sortedMapGetDirRange(self: FileRecordMap, dir_path: []const u8) struct { usize, usize } {
+    return self.sortedMapGetDirRangeBounded(dir_path, .{ 0, self.file_records.keys().len });
+}
+
+pub fn sortedMapGetDirBounded(self: FileRecordMap, dir_path: []const u8, bounds: struct { usize, usize }) []FileRecord {
+    const range = self.sortedMapGetDirRangeBounded(dir_path, bounds);
     return self.file_records.values()[range.@"0"..range.@"1"];
 }
+
+pub fn sortedMapGetDir(self: FileRecordMap, dir_path: []const u8) []FileRecord {
+    const range = self.sortedMapGetDirRange(dir_path);
+    return self.file_records.values()[range.@"0"..range.@"1"];
+}
+
+pub const EntryT = struct {
+    full_path: []const u8,
+    kind: union(enum) {
+        file: void,
+        directory: DirIterator,
+    },
+
+    pub fn getEntryName(entry: @This()) []const u8 {
+        return if (std.mem.lastIndexOfScalar(u8, entry.full_path, '/')) |idx| entry.full_path[idx + 1 ..] else entry.full_path;
+    }
+};
+
+pub const DirIterator = struct {
+    parent_path: []const u8,
+    sorted_map: *const FileRecordMap,
+    dir_range: struct { usize, usize },
+    index: usize = 0,
+
+    pub const empty: DirIterator = .{
+        .parent_path = undefined,
+        .sorted_map = undefined,
+        .dir_range = .{ 0, 0 },
+    };
+
+    pub fn next(self: *DirIterator) ?EntryT {
+        if (self.index >= self.dir_range.@"1" - self.dir_range.@"0")
+            return null;
+
+        const dir = self.sorted_map.file_records.keys()[self.dir_range.@"0"..self.dir_range.@"1"];
+        const first_key = dir[self.index].key;
+        if (std.mem.indexOfScalarPos(u8, first_key, self.parent_path.len + 1, '/')) |next_dir_slash| {
+            const dir_path = first_key[0..next_dir_slash];
+            const dir_range = self.sorted_map.sortedMapGetDirRangeBounded(dir_path, self.dir_range);
+            self.index = dir_range.@"1";
+
+            return .{
+                .full_path = dir_path,
+                .kind = .{ .directory = .{
+                    .parent_path = dir_path,
+                    .sorted_map = self.sorted_map,
+                    .dir_range = dir_range,
+                } },
+            };
+        } else return .{
+            .full_path = first_key,
+            .kind = .{ .file = {} },
+        };
+    }
+};
 
 test "get dir from file records" {
     const allocator = std.testing.allocator;
@@ -148,8 +188,10 @@ test "get dir from file records" {
     try frmap.put(.borrowed("bar/baz/foo.txt"), generic_file_record);
     try frmap.put(.borrowed("uwu/owo/test.txt"), generic_file_record);
 
+    frmap.sort();
+
     {
-        const range = frmap.getDirRange("bar/owo");
+        const range = frmap.sortedMapGetDirRange("bar/owo");
         const dir_keys = frmap.file_records.keys()[range.@"0"..range.@"1"];
         try std.testing.expectEqual(2, dir_keys.len);
         try std.testing.expectEqualStrings("bar/owo/bar.txt", dir_keys[0].key);
@@ -157,7 +199,7 @@ test "get dir from file records" {
     }
 
     {
-        const range = frmap.getDirRange("owo/bar.txt");
+        const range = frmap.sortedMapGetDirRange("owo/bar.txt");
         const dir_keys = frmap.file_records.keys()[range.@"0"..range.@"1"];
         try std.testing.expectEqual(1, dir_keys.len);
         try std.testing.expectEqualStrings("owo/bar.txt", dir_keys[0].key);

@@ -1,10 +1,12 @@
 const std = @import("std");
 const dergdrive = @import("dergdrive");
+const FileRecordMap = dergdrive.client.track.FileRecordMap;
 const expect = std.testing.expect;
 
 const IncludeTree = @This();
 
 pub const IterateDirError = std.fs.Dir.Iterator.Error || std.mem.Allocator.Error || std.fs.Dir.OpenError;
+pub const IterateFileRecordsError = std.mem.Allocator.Error;
 
 pub const FileNode = []const u8;
 
@@ -30,6 +32,11 @@ pub const TreeNode = union(enum) {
             .dir => |dir| dir.flat_breadth,
         };
     }
+};
+
+pub const MapNode = struct {
+    level: usize,
+    is_dir: bool,
 };
 
 const log = std.log.scoped(.@"client/track/IncludeTree");
@@ -66,12 +73,12 @@ const MatchIterator = struct {
     pub fn next(self: *MatchIterator) ?[]const u8 {
         if (self.peek_cache) |cached| {
             self.peek_cache = null;
-            self.rules = self.peek_iter_state;
+            self.rules.iterator.index = self.peek_iter_state.iterator.index;
             return cached;
         }
 
         return while (self.rules.next()) |r| {
-            if (match(self.path, self.is_dir, r))
+            if (isMatch(self.path, self.is_dir, r))
                 break r;
         } else null;
     }
@@ -79,11 +86,11 @@ const MatchIterator = struct {
     pub fn peek(self: *MatchIterator) ?[]const u8 {
         var copy = self.*;
         self.peek_cache = copy.next();
-        self.peek_iter_state = copy.rules;
+        self.peek_iter_state.iterator.index = copy.rules.iterator.index;
         return self.peek_cache;
     }
 
-    /// finds the last matching rule in the iterator without completely consuming it
+    /// Finds the last matching rule in the iterator without completely consuming it.
     pub fn findLastMatch(self: *MatchIterator) ?[]const u8 {
         var last_match: ?[]const u8 = null;
         while (self.peek()) |r| {
@@ -133,6 +140,9 @@ test "swap slices" {
     try std.testing.expectEqualStrings("moan soooooooo out of hell it's straight gut", slc2);
 }
 
+//  TODO: get rid of this and only use the map implementation
+///  NOTE: the tree implementation is only used in the `ls-include command` in `include` mode
+/// and could be easily replaced by the map implementation which is a lot easier to understand and iterate
 pub const TreeIterator = struct {
     include_all: bool = false,
     tree: @FieldType(@FieldType(IncludeTree, "flat_tree"), "tree"),
@@ -344,22 +354,10 @@ pub const TreeIterator = struct {
 
 const capacity_exp = 16;
 
-pub const FlatMap = struct {
-    m: std.StringArrayHashMapUnmanaged(usize),
-
-    // in map mode, directories are encoded with a slash at the end of their path
-    pub fn isDir(path: []const u8) bool {
-        return path.len > 0 and path[path.len - 1] == '/';
-    }
-
-    pub fn origPath(path: []const u8) []const u8 {
-        return if (isDir(path)) path[0 .. path.len - 1] else path;
-    }
-};
-
+//  TODO: eliminate the tree implementation (see `TreeIterator`)
 flat_tree: union(enum) {
     tree: std.ArrayList(TreeNode),
-    map: FlatMap,
+    map: std.StringArrayHashMapUnmanaged(MapNode),
 } = .{ .tree = .empty },
 allocator: std.mem.Allocator,
 root_dir: std.fs.Dir,
@@ -382,11 +380,11 @@ pub fn deinit(self: *IncludeTree) void {
             tree.deinit(self.allocator);
         },
         .map => |*map| {
-            for (map.m.keys()) |key| {
+            for (map.keys()) |key| {
                 self.allocator.free(key);
             }
 
-            map.m.deinit(self.allocator);
+            map.deinit(self.allocator);
         },
     }
 }
@@ -402,15 +400,15 @@ pub fn iterateTree(self: IncludeTree, allocator: std.mem.Allocator) TreeIterator
 }
 
 pub fn buildMap(self: *IncludeTree) IterateDirError!void {
-    self.flat_tree = .{ .map = .{ .m = .empty } };
+    self.flat_tree = .{ .map = .empty };
     const nodes = try self.iterateDir(self.root_dir, self.rules, 1, "");
-    std.debug.assert(nodes == self.flat_tree.map.m.count());
+    std.debug.assert(nodes == self.flat_tree.map.count());
 }
 
-pub fn sort(self: *IncludeTree) std.mem.Allocator.Error!void {
+pub fn sortHumanly(self: *IncludeTree) std.mem.Allocator.Error!void {
     switch (self.flat_tree) {
         .tree => try self.sortTree(),
-        .map => self.sortMap(),
+        .map => self.sortMapHumanly(),
     }
 }
 
@@ -424,13 +422,24 @@ fn sortTree(self: IncludeTree) std.mem.Allocator.Error!void {
     }
 }
 
-fn sortMap(self: *IncludeTree) void {
-    self.flat_tree.map.m.sort(struct {
+fn sortMapHumanly(self: *IncludeTree) void {
+    self.flat_tree.map.sort(struct {
         map: *const @TypeOf(self.flat_tree.map),
 
         pub inline fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
-            const keys = ctx.map.m.keys();
+            const keys = ctx.map.keys();
             return dergdrive.util.sort.humanStringLessThan(keys[a_index], keys[b_index]);
+        }
+    }{ .map = &self.flat_tree.map });
+}
+
+pub fn sortMap(self: *IncludeTree) void {
+    self.flat_tree.map.sort(struct {
+        map: *const @TypeOf(self.flat_tree.map),
+
+        pub inline fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
+            const keys = ctx.map.keys();
+            return std.mem.lessThan(u8, keys[a_index], keys[b_index]);
         }
     }{ .map = &self.flat_tree.map });
 }
@@ -443,21 +452,25 @@ fn addTreeNode(self: *IncludeTree, node: TreeNode) std.mem.Allocator.Error!usize
     return self.flat_tree.tree.items.len - 1;
 }
 
-fn addMapNode(self: *IncludeTree, path: []const u8, level: usize) std.mem.Allocator.Error!void {
-    if (self.flat_tree.map.m.count() == self.flat_tree.map.m.capacity())
-        try self.flat_tree.map.m.ensureTotalCapacity(self.allocator, self.flat_tree.map.m.capacity() + capacity_exp);
+fn addMapNodeNoClobber(self: *IncludeTree, path: []const u8, node: MapNode) std.mem.Allocator.Error!void {
+    if (self.flat_tree.map.count() == self.flat_tree.map.capacity())
+        try self.flat_tree.map.ensureTotalCapacity(self.allocator, self.flat_tree.map.capacity() + capacity_exp);
 
-    self.flat_tree.map.m.putAssumeCapacityNoClobber(path, level);
+    self.flat_tree.map.putAssumeCapacityNoClobber(path, node);
+}
+
+fn addMapNode(self: *IncludeTree, path: []const u8, node: MapNode) std.mem.Allocator.Error!void {
+    if (self.flat_tree.map.count() == self.flat_tree.map.capacity())
+        try self.flat_tree.map.ensureTotalCapacity(self.allocator, self.flat_tree.map.capacity() + capacity_exp);
+
+    self.flat_tree.map.putAssumeCapacity(path, node);
 }
 
 fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, level: usize, path: []const u8) IterateDirError!usize {
     var num_nodes_added: usize = 0;
     var iter = dir.iterate();
     while (try iter.next()) |entry| {
-        const path_chunks = [_][]const u8{ path, entry.name, "" };
-        const use_chunks: usize = if (self.flat_tree == .map and entry.kind == .directory) 3 else 2;
-
-        log.info("use: {d}", .{use_chunks});
+        const path_chunks: []const []const u8 = if (path.len == 0) &.{entry.name} else &.{ path, entry.name };
 
         const FullPath = struct {
             const FullPath = @This();
@@ -475,19 +488,14 @@ fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, leve
                 fp.owned = false;
                 return fp.path;
             }
-
-            pub inline fn origPath(fp: FullPath) []const u8 {
-                return FlatMap.origPath(fp.path);
-            }
         };
 
-        var full_path: FullPath = .{ .path = try std.mem.join(self.allocator, "/", if (path.len == 0) &.{entry.name} else path_chunks[0..use_chunks]), .allocator = self.allocator };
+        var full_path: FullPath = .{ .path = try std.mem.join(self.allocator, "/", path_chunks), .allocator = self.allocator };
         defer full_path.deinit();
 
-        log.debug("full_path: {s}", .{full_path.path});
-        log.debug("orig_path: {s}", .{full_path.origPath()});
+        // log.debug("full_path: {s}", .{full_path.path});
 
-        var match_iter: MatchIterator = .init(full_path.origPath(), entry.kind == .directory, rule_iter);
+        var match_iter: MatchIterator = .init(full_path.path, entry.kind == .directory, rule_iter);
         const prio_rule: ?[]const u8 = match_iter.findLastMatch();
 
         // if (prio_rule) |rule| log.debug("matched rule: {s}", .{rule});
@@ -495,21 +503,16 @@ fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, leve
         var node_index: ?usize = null;
         var node_added = false;
         if (prio_rule) |rule_match| {
-            if (ignore(rule_match) == levelIsIgnore(level)) {
+            if (isIgnore(rule_match) == levelIsIgnore(level)) {
                 node_added = true;
 
                 switch (self.flat_tree) {
-                    .map => {
-                        const fp = full_path.transferOwnership();
-                        log.info("full_path: {s}", .{fp});
-
-                        try self.addMapNode(fp, level);
-                    },
+                    .map => try self.addMapNodeNoClobber(full_path.transferOwnership(), .{ .is_dir = entry.kind == .directory, .level = level }),
                     .tree => switch (entry.kind) {
                         .file => _ = try self.addTreeNode(.{ .file = full_path.transferOwnership() }),
                         .directory => node_index = try self.addTreeNode(.{ .dir = .{ .name = full_path.transferOwnership(), .flat_breadth = 0 } }),
                         else => {
-                            //  TODO: handle symlinks
+                            //  TODO: possibly handle symlinks in the future
                             node_added = false;
                         },
                     },
@@ -521,13 +524,13 @@ fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, leve
         }
 
         if (entry.kind == .directory) {
-            const level_inc: usize = if (node_added) 1 else 0;
-            if (searchForChildRules(full_path.origPath(), match_iter.rules, level + level_inc)) {
+            const new_level: usize = if (node_added) level + 1 else level;
+            if (canHaveChildren(full_path.path, match_iter.rules, new_level)) {
                 var child_dir = try dir.openDir(entry.name, .{ .iterate = true });
                 defer child_dir.close();
 
                 const child_iter = if (node_added) match_iter.rules else rule_iter;
-                const child_dir_nodes = try self.iterateDir(child_dir, child_iter, level + level_inc, full_path.origPath());
+                const child_dir_nodes = try self.iterateDir(child_dir, child_iter, new_level, full_path.path);
 
                 if (self.flat_tree == .tree) {
                     if (node_index) |index| {
@@ -546,7 +549,76 @@ fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, leve
     return num_nodes_added;
 }
 
-pub inline fn ignore(rule: []const u8) bool {
+pub fn iterateSortedFileRecords(self: *IncludeTree, fr_map: *FileRecordMap, dir_range: struct { usize, usize }, rule_iter: RuleIterator, level: usize, path: []const u8) IterateFileRecordsError!void {
+    for (fr_map.file_records.keys()[dir_range.@"0"..dir_range.@"1"]) |key| {
+        var real_path = key.key;
+        const is_dir = blk: {
+            if (std.mem.indexOfScalarPos(u8, key.key, path.len + 1, '/')) |next_dir_slash| {
+                real_path = real_path[0..next_dir_slash];
+                break :blk true;
+            }
+            break :blk false;
+        };
+
+        var match_iter: MatchIterator = .init(real_path, is_dir, rule_iter);
+        const prio_rule = match_iter.findLastMatch();
+
+        const node_added = if (prio_rule) |rule_match| blk: {
+            if (isIgnore(rule_match) == levelIsIgnore(level)) {
+                switch (self.flat_tree) {
+                    .map => try self.addMapNode(try self.allocator.dupe(u8, real_path), .{ .is_dir = is_dir, .level = level }),
+                    .tree => @panic("doesn't support tree mode!"),
+                }
+
+                break :blk true;
+            }
+
+            break :blk false;
+        } else false;
+
+        if (is_dir) {
+            const new_level: usize = if (node_added) level + 1 else level;
+            if (canHaveChildren(real_path, match_iter.rules, new_level)) {
+                const child_dir_range = fr_map.sortedMapGetDirRangeBounded(real_path, dir_range);
+
+                const child_iter = if (node_added) match_iter.rules else rule_iter;
+                try self.iterateSortedFileRecords(fr_map, child_dir_range, child_iter, new_level, real_path);
+            }
+        }
+    }
+}
+
+pub const PathInfo = struct {
+    is_map_entry: bool,
+    ignore: bool,
+    nested_rules: bool,
+};
+
+pub fn sortedMapGetPathInfo(self: IncludeTree, path: []const u8, level: usize) PathInfo {
+    const keys = self.flat_tree.map.keys();
+    if (self.flat_tree.map.getIndex(path)) |idx| return .{
+        .is_map_entry = true,
+        .ignore = levelIsIgnore(self.flat_tree.map.values()[idx].level),
+        .nested_rules = idx < keys.len - 1 and std.mem.startsWith(u8, keys[idx + 1], path),
+    } else {
+        const range = std.sort.equalRange([]const u8, self.flat_tree.map.keys(), path, struct {
+            pub fn compareFn(context: []const u8, item: []const u8) std.math.Order {
+                if (std.mem.startsWith(u8, item, context))
+                    return std.math.Order.eq;
+
+                return std.mem.order(u8, context, item);
+            }
+        }.compareFn);
+
+        return .{
+            .is_map_entry = false,
+            .ignore = !levelIsIgnore(level),
+            .nested_rules = range.@"0" < range.@"1",
+        };
+    }
+}
+
+pub inline fn isIgnore(rule: []const u8) bool {
     return rule.len > 0 and rule[0] == '!';
 }
 
@@ -554,7 +626,7 @@ pub inline fn levelIsIgnore(level: usize) bool {
     return level % 2 == 0;
 }
 
-fn searchForChildRules(parent_path: []const u8, rule_iter: RuleIterator, level: usize) bool {
+fn canHaveChildren(parent_path: []const u8, rule_iter: RuleIterator, level: usize) bool {
     var iter = rule_iter;
     return while (iter.next()) |rule| {
         if (canHaveChild(parent_path, rule, level)) {
@@ -565,7 +637,7 @@ fn searchForChildRules(parent_path: []const u8, rule_iter: RuleIterator, level: 
 }
 
 fn canHaveChild(parent_path: []const u8, rule: []const u8, level: usize) bool {
-    if (levelIsIgnore(level) != ignore(rule))
+    if (levelIsIgnore(level) != isIgnore(rule))
         return false;
 
     if (canMatchAnywhere(rule))
@@ -581,12 +653,12 @@ fn canHaveChild(parent_path: []const u8, rule: []const u8, level: usize) bool {
         rule_mut = rule_mut[0..slash_end];
         rule_slashes -|= 1;
     }) {
-        if (match(parent_path, true, rule_mut))
+        if (isMatch(parent_path, true, rule_mut))
             break true;
     } else false;
 }
 
-fn match(path: []const u8, is_dir: bool, rule: []const u8) bool {
+fn isMatch(path: []const u8, is_dir: bool, rule: []const u8) bool {
     if (rule.len < 1)
         return false;
 
@@ -623,14 +695,14 @@ fn match(path: []const u8, is_dir: bool, rule: []const u8) bool {
                     break path[path_pos - 1] == '/';
                 }
 
-                if (!matchRuleChunk(path, &path_pos, &next_rule, false))
+                if (!isRuleChunkMatch(path, &path_pos, &next_rule, false))
                     break false;
 
                 rule_chunk_matched = true;
                 continue;
             }
         } else if (!rule_chunk_matched) {
-            if (!matchRuleChunk(path, &path_pos, &rule_chunk_mut, true))
+            if (!isRuleChunkMatch(path, &path_pos, &rule_chunk_mut, true))
                 break false;
         }
 
@@ -648,7 +720,7 @@ fn match(path: []const u8, is_dir: bool, rule: []const u8) bool {
                     var next_rule = peek;
                     const max_pos = next_slash orelse path.len;
 
-                    if (!matchRuleChunk(path, &path_pos, &next_rule, false) or path_pos - next_rule.len >= max_pos)
+                    if (!isRuleChunkMatch(path, &path_pos, &next_rule, false) or path_pos - next_rule.len >= max_pos)
                         break false;
 
                     rule_chunk_matched = true;
@@ -668,7 +740,7 @@ fn canMatchAnywhere(rule: []const u8) bool {
     return slash_pos == null or slash_pos == rule.len - 1;
 }
 
-fn matchRuleChunk(path: []const u8, path_pos: *usize, rule_chunk: *[]const u8, strict: bool) bool {
+fn isRuleChunkMatch(path: []const u8, path_pos: *usize, rule_chunk: *[]const u8, strict: bool) bool {
     rule_chunk.* = std.mem.trim(u8, rule_chunk.*, "/");
     path_pos.* = if (std.mem.indexOfPos(u8, path, path_pos.*, rule_chunk.*)) |pos| blk: {
         if (strict and pos != path_pos.*)
@@ -687,54 +759,54 @@ test "match path chunk" {
     const path = "foo/owo/bar";
     var path_pos: usize = 0;
     var rule: []const u8 = "foo/";
-    try expect(IncludeTree.matchRuleChunk(path, &path_pos, &rule, false));
+    try expect(IncludeTree.isRuleChunkMatch(path, &path_pos, &rule, false));
     rule = "/bar";
-    try expect(IncludeTree.matchRuleChunk(path, &path_pos, &rule, false));
+    try expect(IncludeTree.isRuleChunkMatch(path, &path_pos, &rule, false));
     try expect(path_pos == path.len);
 }
 
 test "match path anywhere" {
-    try expect(IncludeTree.match("foo", false, "foo"));
-    try expect(IncludeTree.match("foo", false, "/foo"));
-    try expect(!IncludeTree.match("foo", false, "/foo/"));
-    try expect(IncludeTree.match("foo", true, "/foo/"));
+    try expect(IncludeTree.isMatch("foo", false, "foo"));
+    try expect(IncludeTree.isMatch("foo", false, "/foo"));
+    try expect(!IncludeTree.isMatch("foo", false, "/foo/"));
+    try expect(IncludeTree.isMatch("foo", true, "/foo/"));
 
-    try expect(IncludeTree.match("foo/bar", false, "bar"));
-    try expect(IncludeTree.match("foo/owo/bar", false, "bar"));
-    try expect(!IncludeTree.match("foo/owo/bar", false, "owo"));
-    try expect(!IncludeTree.match("foo/owo/bar", false, "foo"));
-    try expect(!IncludeTree.match("foo/bar", false, "bar/"));
-    try expect(IncludeTree.match("foo/owo/bar", true, "bar/"));
-    try expect(!IncludeTree.match("foo/owo/bar", false, "owo/bar"));
+    try expect(IncludeTree.isMatch("foo/bar", false, "bar"));
+    try expect(IncludeTree.isMatch("foo/owo/bar", false, "bar"));
+    try expect(!IncludeTree.isMatch("foo/owo/bar", false, "owo"));
+    try expect(!IncludeTree.isMatch("foo/owo/bar", false, "foo"));
+    try expect(!IncludeTree.isMatch("foo/bar", false, "bar/"));
+    try expect(IncludeTree.isMatch("foo/owo/bar", true, "bar/"));
+    try expect(!IncludeTree.isMatch("foo/owo/bar", false, "owo/bar"));
 }
 
 test "match single ast wildcard" {
-    try expect(IncludeTree.match("owo", false, "*"));
-    try expect(!IncludeTree.match("owo", false, "*/"));
-    try expect(IncludeTree.match("owo", true, "*/"));
-    try expect(IncludeTree.match("foo.txt", false, "foo.*"));
-    try expect(IncludeTree.match("foo.exe", false, "foo.*"));
-    try expect(IncludeTree.match("foo.txt", false, "*.txt"));
-    try expect(IncludeTree.match("bar.txt", false, "*.txt"));
-    try expect(IncludeTree.match("foo/owo/bar", false, "foo/*/bar"));
-    try expect(IncludeTree.match("foo/owo/bar", false, "foo/*wo/bar"));
-    try expect(IncludeTree.match("foo/owo/bar", false, "foo/o*/bar"));
-    try expect(!IncludeTree.match("foo/owo/bar", false, "foo/*ar"));
-    try expect(!IncludeTree.match("foo", false, "foo/*"));
-    try expect(IncludeTree.match("foo/bar", false, "foo/*"));
-    try expect(!IncludeTree.match("foo/bar/owo", false, "foo/*"));
+    try expect(IncludeTree.isMatch("owo", false, "*"));
+    try expect(!IncludeTree.isMatch("owo", false, "*/"));
+    try expect(IncludeTree.isMatch("owo", true, "*/"));
+    try expect(IncludeTree.isMatch("foo.txt", false, "foo.*"));
+    try expect(IncludeTree.isMatch("foo.exe", false, "foo.*"));
+    try expect(IncludeTree.isMatch("foo.txt", false, "*.txt"));
+    try expect(IncludeTree.isMatch("bar.txt", false, "*.txt"));
+    try expect(IncludeTree.isMatch("foo/owo/bar", false, "foo/*/bar"));
+    try expect(IncludeTree.isMatch("foo/owo/bar", false, "foo/*wo/bar"));
+    try expect(IncludeTree.isMatch("foo/owo/bar", false, "foo/o*/bar"));
+    try expect(!IncludeTree.isMatch("foo/owo/bar", false, "foo/*ar"));
+    try expect(!IncludeTree.isMatch("foo", false, "foo/*"));
+    try expect(IncludeTree.isMatch("foo/bar", false, "foo/*"));
+    try expect(!IncludeTree.isMatch("foo/bar/owo", false, "foo/*"));
 
     // matches the first occurence of the rule chunk after wildcard
-    try expect(!IncludeTree.match("foo", false, "f*o"));
-    try expect(IncludeTree.match("foo/owo/bar", false, "f*o/ow*/bar"));
-    try expect(IncludeTree.match("foo/owo/bar", false, "foo/*w*/bar"));
-    try expect(!IncludeTree.match("foo", false, "foo/**"));
+    try expect(!IncludeTree.isMatch("foo", false, "f*o"));
+    try expect(IncludeTree.isMatch("foo/owo/bar", false, "f*o/ow*/bar"));
+    try expect(IncludeTree.isMatch("foo/owo/bar", false, "foo/*w*/bar"));
+    try expect(!IncludeTree.isMatch("foo", false, "foo/**"));
 }
 
 test "match double ast wildcard" {
-    try expect(IncludeTree.match("foo/owo/bar", true, "foo/owo/**/"));
-    try expect(IncludeTree.match("foo/owo/bar", true, "foo/**/bar/"));
-    try expect(IncludeTree.match("foo/owo/bar", true, "**/owo/bar/"));
+    try expect(IncludeTree.isMatch("foo/owo/bar", true, "foo/owo/**/"));
+    try expect(IncludeTree.isMatch("foo/owo/bar", true, "foo/**/bar/"));
+    try expect(IncludeTree.isMatch("foo/owo/bar", true, "**/owo/bar/"));
 }
 
 test "can have child" {

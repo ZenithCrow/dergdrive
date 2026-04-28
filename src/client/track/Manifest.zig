@@ -318,6 +318,7 @@ fn storeFileRecords(self: *Manifest, writer: *std.Io.Writer) std.Io.Writer.Error
     }
 }
 
+/// make sure to load local prefix overrides prior to this
 pub fn loadManifest(self: *Manifest) LoadManifestError!void {
     self.oride_pfixes.clearRetainingCapacity();
     self.file_record_map.clear();
