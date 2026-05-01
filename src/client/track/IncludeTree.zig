@@ -526,7 +526,10 @@ fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, leve
         if (entry.kind == .directory) {
             const new_level: usize = if (node_added) level + 1 else level;
             if (canHaveChildren(full_path.path, match_iter.rules, new_level)) {
-                var child_dir = try dir.openDir(entry.name, .{ .iterate = true });
+                var child_dir = dir.openDir(entry.name, .{ .iterate = true }) catch |err| {
+                    log.warn("Couldn't open dir \"{s}\" due to error: {t}.", .{ full_path.path, err });
+                    continue;
+                };
                 defer child_dir.close();
 
                 const child_iter = if (node_added) match_iter.rules else rule_iter;
@@ -566,7 +569,10 @@ pub fn iterateSortedFileRecords(self: *IncludeTree, fr_map: *FileRecordMap, dir_
         const node_added = if (prio_rule) |rule_match| blk: {
             if (isIgnore(rule_match) == levelIsIgnore(level)) {
                 switch (self.flat_tree) {
-                    .map => try self.addMapNode(try self.allocator.dupe(u8, real_path), .{ .is_dir = is_dir, .level = level }),
+                    .map => {
+                        if (!self.flat_tree.map.contains(real_path))
+                            try self.addMapNode(try self.allocator.dupe(u8, real_path), .{ .is_dir = is_dir, .level = level });
+                    },
                     .tree => @panic("doesn't support tree mode!"),
                 }
 
@@ -594,7 +600,7 @@ pub const PathInfo = struct {
     nested_rules: bool,
 };
 
-pub fn sortedMapGetPathInfo(self: IncludeTree, path: []const u8, level: usize) PathInfo {
+fn mapGetPathInfo(comptime sorted_humanly: bool, self: IncludeTree, path: []const u8, level: usize) PathInfo {
     const keys = self.flat_tree.map.keys();
     if (self.flat_tree.map.getIndex(path)) |idx| return .{
         .is_map_entry = true,
@@ -606,7 +612,7 @@ pub fn sortedMapGetPathInfo(self: IncludeTree, path: []const u8, level: usize) P
                 if (std.mem.startsWith(u8, item, context))
                     return std.math.Order.eq;
 
-                return std.mem.order(u8, context, item);
+                return if (comptime sorted_humanly) dergdrive.util.sort.humanStringOrder(context, item) else std.mem.order(u8, context, item);
             }
         }.compareFn);
 
@@ -616,6 +622,14 @@ pub fn sortedMapGetPathInfo(self: IncludeTree, path: []const u8, level: usize) P
             .nested_rules = range.@"0" < range.@"1",
         };
     }
+}
+
+pub inline fn sortedMapGetPathInfo(self: IncludeTree, path: []const u8, level: usize) PathInfo {
+    return mapGetPathInfo(false, self, path, level);
+}
+
+pub inline fn humanlySortedMapGetPathInfo(self: IncludeTree, path: []const u8, level: usize) PathInfo {
+    return mapGetPathInfo(true, self, path, level);
 }
 
 pub inline fn isIgnore(rule: []const u8) bool {

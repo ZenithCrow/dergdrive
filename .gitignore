@@ -3,4 +3,5 @@ zig-out/
 .vscode
 
 /config/
+/.test/test-sync
 include.txt

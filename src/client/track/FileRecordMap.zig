@@ -5,6 +5,8 @@ const Manifest = @import("Manifest.zig");
 
 const FileRecordMap = @This();
 
+const log = std.log.scoped(.@"client/track/FileRecordMap");
+
 pub const FileRecord = struct {
     path: []const u8,
     tstamp: Manifest.Timestamp,
@@ -49,23 +51,24 @@ const FileRecordContext = struct {
     }
 };
 
-const FileRecordHashMap = std.ArrayHashMap(FileRecordKey, FileRecord, FileRecordContext, true);
+const FileRecordHashMap = std.ArrayHashMapUnmanaged(FileRecordKey, FileRecord, FileRecordContext, true);
 
-file_records: FileRecordHashMap,
+file_records: FileRecordHashMap = .empty,
 sorted: bool = false,
+allocator: std.mem.Allocator,
 
 pub fn init(allocator: std.mem.Allocator) FileRecordMap {
     return .{
-        .file_records = .init(allocator),
+        .allocator = allocator,
     };
 }
 
 pub fn deinit(self: *FileRecordMap) void {
     for (self.file_records.keys()) |key| {
         if (key.owned)
-            self.file_records.allocator.free(key.key);
+            self.allocator.free(key.key);
     }
-    self.file_records.deinit();
+    self.file_records.deinit(self.allocator);
 }
 
 pub inline fn clear(self: *FileRecordMap) void {
@@ -74,7 +77,7 @@ pub inline fn clear(self: *FileRecordMap) void {
 }
 
 pub inline fn put(self: *FileRecordMap, key: FileRecordKey, val: FileRecord) std.mem.Allocator.Error!void {
-    try self.file_records.put(key, val);
+    try self.file_records.put(self.allocator, key, val);
     self.sorted = false;
 }
 
@@ -87,13 +90,17 @@ pub fn sort(self: *FileRecordMap) void {
             return std.mem.lessThan(u8, keys[a_i].key, keys[b_i].key);
         }
     }{ .self = &self.file_records });
+
+    self.sorted = true;
 }
 
 pub fn sortedMapGetDirRangeBounded(self: FileRecordMap, dir_path: []const u8, bounds: struct { usize, usize }) struct { usize, usize } {
+    std.debug.assert(self.sorted);
+
     if (dir_path.len == 0)
         return .{ 0, self.file_records.keys().len };
 
-    return std.sort.equalRange(FileRecordKey, self.file_records.keys()[bounds.@"0"..bounds.@"1"], dir_path, struct {
+    const rel_range = std.sort.equalRange(FileRecordKey, self.file_records.keys()[bounds.@"0"..bounds.@"1"], dir_path, struct {
         pub fn compareFn(context: []const u8, item: FileRecordKey) std.math.Order {
             if (std.mem.startsWith(u8, item.key, context))
                 return std.math.Order.eq;
@@ -101,6 +108,11 @@ pub fn sortedMapGetDirRangeBounded(self: FileRecordMap, dir_path: []const u8, bo
             return std.mem.order(u8, context, item.key);
         }
     }.compareFn);
+
+    return .{
+        rel_range.@"0" + bounds.@"0",
+        rel_range.@"1" + bounds.@"0",
+    };
 }
 
 pub inline fn sortedMapGetDirRange(self: FileRecordMap, dir_path: []const u8) struct { usize, usize } {
@@ -127,6 +139,13 @@ pub const EntryT = struct {
     pub fn getEntryName(entry: @This()) []const u8 {
         return if (std.mem.lastIndexOfScalar(u8, entry.full_path, '/')) |idx| entry.full_path[idx + 1 ..] else entry.full_path;
     }
+
+    pub fn format(
+        self: @This(),
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        try writer.print("{t}: {s}", .{ self.kind, self.full_path });
+    }
 };
 
 pub const DirIterator = struct {
@@ -135,9 +154,11 @@ pub const DirIterator = struct {
     dir_range: struct { usize, usize },
     index: usize = 0,
 
+    const empty_map: FileRecordMap = .init(undefined);
+
     pub const empty: DirIterator = .{
-        .parent_path = undefined,
-        .sorted_map = undefined,
+        .parent_path = "",
+        .sorted_map = &empty_map,
         .dir_range = .{ 0, 0 },
     };
 
@@ -160,10 +181,13 @@ pub const DirIterator = struct {
                     .dir_range = dir_range,
                 } },
             };
-        } else return .{
-            .full_path = first_key,
-            .kind = .{ .file = {} },
-        };
+        } else {
+            self.index += 1;
+            return .{
+                .full_path = first_key,
+                .kind = .{ .file = {} },
+            };
+        }
     }
 };
 

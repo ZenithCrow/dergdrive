@@ -75,48 +75,20 @@ const Mode = enum {
 
 inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !void {
     const ctx = try cli.command_exec.initBroadContext(args, allocator);
-    defer ctx.deinitBroadContext(allocator);
+    defer ctx.deinit(allocator);
 
-    const root_path = if (ctx.root_path) |v| v else {
-        log.err(cli.Option.opt_not_set_template, .{ "Root directory", root_dir_opt.root_dir_opt_name, root_dir_opt.option.long });
-        return error.RootDirNotSet;
-    };
+    var param_vals: cli.command_exec.ParamContextValues = try .init(ctx, allocator);
+    defer param_vals.deinit(allocator);
+    // beyond this point, `root_path` and `include_rules_path` are not null
 
-    const include_rules_path = if (ctx.include_rules_path) |v| v else {
-        log.err(cli.Option.opt_not_set_template, .{ "Include rules file", include_rules_opt.include_rules_opt_name, include_rules_opt.option.long });
-        return error.IncludeRulesFileNotSet;
-    };
-
-    var root_dir = std.fs.openDirAbsolute(root_path, .{ .iterate = true }) catch |err| {
-        log.err("Couldn't open root directory {s} due to error: {t}.", .{ root_path, err });
-        return error.RootDirOpenFailed;
-    };
-    defer root_dir.close();
-
-    const cwd = if (try ctx.env.getWithCwd(include_rules_opt.include_rules_opt_name, false)) |val| val.cwd else std.fs.cwd();
-
-    const rule_text = blk: {
-        const rule_file = cwd.openFile(include_rules_path, .{}) catch |err| {
-            log.err("Couldn't open include rules file {s} due to error: {t}.", .{ include_rules_path, err });
-            return error.RuleFileOpenFailed;
-        };
-        defer rule_file.close();
-
-        const size = try rule_file.getEndPos();
-
-        var fr = rule_file.reader(&.{});
-        break :blk try fr.interface.readAlloc(allocator, size);
-    };
-    defer allocator.free(rule_text);
-
-    var tree: IncludeTree = .init(root_dir, rule_text, allocator);
+    var tree: IncludeTree = .init(param_vals.root_dir_iterable, param_vals.rule_text, allocator);
     defer tree.deinit();
 
     var w_buf: [512]u8 = undefined;
     var stdout_w = std.fs.File.stdout().writerStreaming(&w_buf);
     const decorate = stdout_w.file.getOrEnableAnsiEscapeSupport();
 
-    try cli.termfmt.printDecorated(&stdout_w.interface, decorate, &.{ .bold, .blue }, "{s}\n", .{root_path});
+    try cli.termfmt.printDecorated(&stdout_w.interface, decorate, &.{ .bold, .blue }, "{s}\n", .{ctx.root_path.?});
 
     const vert_pipe = "\u{2502}";
     const bent_pipe = "\u{2514}";
@@ -203,8 +175,9 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
                             .directory, .file => |k| {
                                 const full_path = try std.mem.join(ipt_ctx.allocator, "/", if (path.len == 0) &.{entry.name} else &.{ path, entry.name });
 
-                                const map_include: ?bool = if (ipt_ctx.iter.flat_tree.map.get(full_path)) |node| !IncludeTree.levelIsIgnore(node.level) else null;
-                                const is_included = if (map_include) |m| m else IncludeTree.levelIsIgnore(level);
+                                const path_info = ipt_ctx.iter.humanlySortedMapGetPathInfo(full_path, level);
+                                const map_include: ?bool = if (path_info.is_map_entry) !path_info.ignore else null;
+                                const is_included = if (map_include) |m| m else if (path_info.nested_rules) true else !path_info.ignore;
 
                                 if (!is_included and ipt_ctx.only_include or is_included and ipt_ctx.only_ignore) {
                                     ipt_ctx.allocator.free(full_path);
@@ -267,7 +240,7 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
                         if (item.kind == .directory and !lvl_empty) {
                             var err: ?anyerror = null;
                             if (dir.openDir(entry_name, .{ .iterate = true })) |d| {
-                                if (iteratePrintDirectory(d, entry_name, if (item.map_include != null) level + 1 else level, ipt_ctx)) |_| {} else |e| err = e;
+                                if (iteratePrintDirectory(d, item.full_path, if (item.map_include != null) level + 1 else level, ipt_ctx)) |_| {} else |e| err = e;
                             } else |e| err = e;
 
                             if (err) |e| {
@@ -314,7 +287,7 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
                 .allocator = allocator,
             };
 
-            try DirIter.iteratePrintDirectory(root_dir, "", 1, &ipt_ctx);
+            try DirIter.iteratePrintDirectory(param_vals.root_dir_iterable, "", 1, &ipt_ctx);
         },
     }
 

@@ -1,10 +1,12 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const dergdrive = @import("dergdrive");
 
 const Command = @import("Command.zig");
 const help_cmd = @import("commands/help.zig");
 const @"ls-include_cmd" = @import("commands/ls-include.zig");
+const @"test-sync_cmd" = @import("commands/test-sync.zig");
 const Option = @import("Option.zig");
 const help_opt = @import("options/help.zig");
 const @"include-rules_opt" = @import("options/include-rules.zig");
@@ -19,10 +21,10 @@ pub const ExecError = error{
     UnknownCommand,
 } || Command.ExecError;
 
-const commands: []const Command = &.{
+const commands: []const Command = &(.{
     help_cmd.command,
     @"ls-include_cmd".command,
-};
+} ++ if (builtin.mode == .Debug) .{@"test-sync_cmd".command} else .{});
 const CommandTup = struct { []const u8, Command };
 const command_tups: [commands.len]CommandTup = blk: {
     var tups: [commands.len]CommandTup = undefined;
@@ -197,13 +199,14 @@ pub fn printCmdHelp(cmd: Command) void {
 }
 
 pub const ParamContext = struct {
+    args: []const []const u8,
     conf: *dergdrive.conf.Conf,
     env: *dergdrive.conf.Env,
     vol: ?[]const u8 = null,
     root_path: ?[]const u8 = null,
     include_rules_path: ?[]const u8 = null,
 
-    pub fn deinitBroadContext(self: ParamContext, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: ParamContext, allocator: std.mem.Allocator) void {
         allocator.destroy(self.conf);
 
         self.env.deinit();
@@ -241,7 +244,7 @@ pub fn initBroadContext(args: []const []const u8, allocator: std.mem.Allocator) 
 
         // replace env with newer one having volume context
         env.deinit();
-        env.* = .init(dergdrive.conf.Conf.g_conf, allocator);
+        env.* = .init(conf.*, allocator);
         env.loadEnvs() catch |err| {
             log.err(load_evs_err_notice, .{err});
             return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
@@ -251,6 +254,7 @@ pub fn initBroadContext(args: []const []const u8, allocator: std.mem.Allocator) 
     } else null;
 
     return .{
+        .args = args,
         .conf = conf,
         .env = env,
         .vol = vol,
@@ -262,3 +266,66 @@ pub fn initBroadContext(args: []const []const u8, allocator: std.mem.Allocator) 
 pub fn getCliThenConfigValue(env: *const dergdrive.conf.Env, config_opt_name: []const u8, args: []const []const u8, cli_opt: Option) ?[]const u8 {
     return if (parser.getAssociatedValue(args, cli_opt.long, cli_opt.short, (cli_opt.value orelse return null).eql_sign)) |v| v else if (env.get(config_opt_name)) |v| v else null;
 }
+
+pub const ParamContextValues = struct {
+    root_dir_iterable: std.fs.Dir,
+    rule_text: []const u8,
+
+    pub fn init(ctx: ParamContext, allocator: std.mem.Allocator) !ParamContextValues {
+        const root_path = if (ctx.root_path) |v| v else {
+            log.err(Option.opt_not_set_template, .{ "Root directory", @"root-dir_opt".root_dir_opt_name, @"root-dir_opt".option.long });
+            return error.RootDirNotSet;
+        };
+
+        var root_dir_wd_res = try ctx.env.getWithCwd(@"include-rules_opt".include_rules_opt_name, false);
+        const root_dir_not_cli = parser.getAssociatedValue(ctx.args, @"include-rules_opt".option.long, @"include-rules_opt".option.short, @"include-rules_opt".option.value.?.eql_sign) == null;
+        const root_dir_wd = if (root_dir_not_cli and root_dir_wd_res != null)
+            root_dir_wd_res.?.cwd
+        else
+            std.fs.cwd();
+
+        defer if (root_dir_wd_res) |*res| res.cwd.close();
+
+        const root_dir = root_dir_wd.openDir(root_path, .{ .iterate = true }) catch |err| {
+            log.err("Couldn't open root directory {s} due to error: {t}.", .{ root_path, err });
+            return error.RootDirOpenFailed;
+        };
+
+        const include_rules_path = if (ctx.include_rules_path) |v| v else {
+            log.err(Option.opt_not_set_template, .{ "Include rules file", @"include-rules_opt".include_rules_opt_name, @"include-rules_opt".option.long });
+            return error.IncludeRulesFileNotSet;
+        };
+
+        var include_rules_wd_res = try ctx.env.getWithCwd(@"include-rules_opt".include_rules_opt_name, false);
+        const include_rules_not_cli = parser.getAssociatedValue(ctx.args, @"include-rules_opt".option.long, @"include-rules_opt".option.short, @"include-rules_opt".option.value.?.eql_sign) == null;
+        const include_rules_wd = if (include_rules_not_cli and include_rules_wd_res != null)
+            include_rules_wd_res.?.cwd
+        else
+            std.fs.cwd();
+
+        defer if (include_rules_wd_res) |*res| res.cwd.close();
+
+        const rule_text = blk: {
+            const rule_file = include_rules_wd.openFile(include_rules_path, .{}) catch |err| {
+                log.err("Couldn't open include rules file {s} due to error: {t}.", .{ include_rules_path, err });
+                return error.RuleFileOpenFailed;
+            };
+            defer rule_file.close();
+
+            const size = try rule_file.getEndPos();
+
+            var fr = rule_file.reader(&.{});
+            break :blk try fr.interface.readAlloc(allocator, size);
+        };
+
+        return .{
+            .root_dir_iterable = root_dir,
+            .rule_text = rule_text,
+        };
+    }
+
+    pub fn deinit(self: *ParamContextValues, allocator: std.mem.Allocator) void {
+        self.root_dir_iterable.close();
+        allocator.free(self.rule_text);
+    }
+};

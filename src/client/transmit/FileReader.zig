@@ -92,11 +92,12 @@ fn pipeDir(self: *FileReader, dir: Dir) PipeDirError!void {
                 };
                 defer file.close();
 
-                self.pipeFile(file, try self.req_stor.newPushFileNew()) catch |err| {
-                    log.err(pipe_file_error_notice, .{ entry.name, err });
-                    has_error = true;
-                    continue;
-                };
+                log.info("push file: {s}", .{entry.name});
+                // self.pipeFile(file, try self.req_stor.newPushFileNew()) catch |err| {
+                //     log.err(pipe_file_error_notice, .{ entry.name, err });
+                //     has_error = true;
+                //     continue;
+                // };
             },
             .directory => {
                 var sub_dir = dir.openDir(entry.name, .{ .iterate = true }) catch |err| {
@@ -125,19 +126,24 @@ fn pipeDir(self: *FileReader, dir: Dir) PipeDirError!void {
 
 pub fn syncFile(
     self: *FileReader,
+    path: []const u8,
     file: ?File,
     sync_op: SyncOp,
-    file_record: ?*const FileRecordMap.FileRecord,
+    file_record: ?FileRecordMap.FileRecord,
 ) SyncFileError!void {
+    _ = self;
+
     if (file == null) {
         if (file_record) |fr| {
             _ = fr;
             switch (@as(u2, @intFromBool(sync_op.push.deleted)) << 1 | @as(u2, @intFromBool(sync_op.pull.new))) {
                 0b00 => return SyncFileError.NoPushDeletedPullNew,
                 0b01 => {
-                    //  TODO: pull fil
+                    log.info("pull file: {s}", .{path});
+                    //  TODO: pull file
                 },
                 0b10 => {
+                    log.info("delete server file: {s}", .{path});
                     //  TODO: delete file on server
                 },
                 0b11 => return SyncFileError.IllegalCombination,
@@ -147,9 +153,13 @@ pub fn syncFile(
         switch (@as(u2, @intFromBool(sync_op.push.new)) << 1 | @as(u2, @intFromBool(sync_op.pull.deleted))) {
             0b00 => return SyncFileError.NoPushNewPullDeleted,
             0b01 => {
+                log.info("delete local file: {s}", .{path});
                 //  TODO: delele file locally
             },
-            0b10 => try self.pipeFile(file.?, try self.req_stor.newPushFileNew()),
+            0b10 => {
+                log.info("push file: {s}", .{path});
+                //try self.pipeFile(file.?, try self.req_stor.newPushFileNew());
+            },
             0b11 => return SyncFileError.IllegalCombination,
         }
     } else {
@@ -157,15 +167,21 @@ pub fn syncFile(
             0b00 => {
                 const stat = try file.?.stat();
                 if (stat.mtime > file_record.?.tstamp.mod_time) {
-                    try self.pipeFile(file.?, try self.req_stor.newPushFileNew());
+                    log.info("push file: {s}", .{path});
+                    //try self.pipeFile(file.?, try self.req_stor.newPushFileNew());
                 } else if (stat.mtime < file_record.?.tstamp.mod_time) {
+                    log.info("pull file: {s}", .{path});
                     //  TODO: pull file
                 }
             },
             0b01 => {
+                log.info("pull file: {s}", .{path});
                 //  TODO: pull file
             },
-            0b10 => try self.pipeFile(file.?, try self.req_stor.newPushFileNew()),
+            0b10 => {
+                log.info("push file: {s}", .{path});
+                //try self.pipeFile(file.?, try self.req_stor.newPushFileNew());
+            },
             0b11 => return SyncFileError.IllegalCombination,
         }
     }
@@ -174,29 +190,32 @@ pub fn syncFile(
 /// if not null, `dir` must be open with iterate flag
 pub fn syncDir(
     self: *FileReader,
-    subpath: []const u8,
+    path: []const u8,
     dir: ?Dir,
     sync_op: SyncOp,
     frmap_dir_iter: FileRecordMap.DirIterator,
     allocator: std.mem.Allocator,
 ) SyncDirError!void {
     if (dir == null) {
-        if (frmap_dir_iter.dir_range.@"0" < frmap_dir_iter.dir_range.@"0") {
+        if (frmap_dir_iter.dir_range.@"0" < frmap_dir_iter.dir_range.@"1") {
             switch (@as(u2, @intFromBool(sync_op.push.deleted)) << 1 | @as(u2, @intFromBool(sync_op.pull.new))) {
                 0b00 => return SyncFileError.NoPushDeletedPullNew,
                 0b01 => {
+                    log.info("pull dir: {s}", .{path});
                     //  TODO: pull dir recursively
                 },
                 0b10 => {
+                    log.info("delete server dir: {s}", .{path});
                     //  TODO: delete dir recursively on server
                 },
                 0b11 => return SyncFileError.IllegalCombination,
             }
         } else return SyncFileError.NoOp;
-    } else if (frmap_dir_iter.dir_range.@"0" == frmap_dir_iter.dir_range.@"0") {
+    } else if (frmap_dir_iter.dir_range.@"0" == frmap_dir_iter.dir_range.@"1") {
         switch (@as(u2, @intFromBool(sync_op.push.new)) << 1 | @as(u2, @intFromBool(sync_op.pull.deleted))) {
             0b00 => return SyncFileError.NoPushNewPullDeleted,
             0b01 => {
+                log.info("delete local dir: {s}", .{path});
                 //  TODO: delele dir recursively locally
             },
             0b10 => try self.pipeDir(dir.?),
@@ -212,9 +231,10 @@ pub fn syncDir(
                     .rules = undefined,
                 };
 
-                try self.syncDirApplyRules(subpath, dir, sync_op, frmap_dir_iter, empty_rules, 0, allocator);
+                try self.syncDirApplyRules(path, dir, sync_op, frmap_dir_iter, empty_rules, 0, allocator);
             },
             0b01 => {
+                log.info("pull dir: {s}", .{path});
                 //  TODO: pull dir recursively
             },
             0b10 => try self.pipeDir(dir.?),
@@ -225,21 +245,24 @@ pub fn syncDir(
 
 pub fn syncFileApplyRules(
     self: *FileReader,
-    subpath: []const u8,
+    path: []const u8,
     file: ?File,
     sync_op: SyncOp,
-    file_record: ?*const FileRecordMap.FileRecord,
+    file_record: ?FileRecordMap.FileRecord,
     itree_map: IncludeTree,
     level: usize,
 ) SyncFileError!void {
-    if (if (itree_map.flat_tree.map.get(subpath)) |f| !IncludeTree.levelIsIgnore(f.level) else IncludeTree.levelIsIgnore(level))
-        try self.syncFile(file, sync_op, file_record);
+    if (if (itree_map.flat_tree.map.get(path)) |f| !IncludeTree.levelIsIgnore(f.level) else IncludeTree.levelIsIgnore(level)) {
+        try self.syncFile(path, file, sync_op, file_record);
+    } else {
+        log.debug("ignoring: {s}", .{path});
+    }
 }
 
 /// if not null, `dir` must be open with iterate flag
 pub fn syncDirApplyRules(
     self: *FileReader,
-    subpath: []const u8,
+    path: []const u8,
     dir: ?Dir,
     sync_op: SyncOp,
     frmap_dir_iter: FileRecordMap.DirIterator,
@@ -271,7 +294,7 @@ pub fn syncDirApplyRules(
         }) |entry| {
             switch (entry.kind) {
                 .directory, .file => |k| {
-                    const full_path = try std.mem.join(allocator, "/", if (subpath.len == 0) &.{entry.name} else &.{ subpath, entry.name });
+                    const full_path = try std.mem.join(allocator, "/", if (path.len == 0) &.{entry.name} else &.{ path, entry.name });
 
                     try dir_list.append(allocator, .{
                         .full_path = full_path,
@@ -295,6 +318,20 @@ pub fn syncDirApplyRules(
             return std.mem.lessThan(u8, lhs.getEntryName(), rhs.getEntryName());
         }
     }.lessThan);
+
+    std.debug.print("\ndir_list_iter entries:\n", .{});
+    var dliter = dir_list_iter;
+    while (dliter.next()) |entry| {
+        std.debug.print("{f}\n", .{entry});
+    }
+
+    std.debug.print("\nfrmap_dir_iter entries:\n", .{});
+    var fmiter = frmap_dir_iter;
+    while (fmiter.next()) |entry| {
+        std.debug.print("{f}\n", .{entry});
+    }
+
+    std.debug.print("\n", .{});
 
     var frmap_dir_iter_mut = frmap_dir_iter;
 
@@ -325,8 +362,12 @@ pub fn syncDirApplyRules(
             frmap_entry = frmap_dir_iter_mut.next();
         }
 
+        log.debug("fsys_e: {?f}", .{fsys_e});
+        log.debug("frmap_e: {?f}", .{frmap_e});
+
         if (is_dir) {
             const path_info = itree_map.sortedMapGetPathInfo(full_path, level);
+            log.debug("path_info: nested_rules: {any}; {s}", .{ path_info.nested_rules, if (path_info.ignore) "ignore" else "include" });
 
             if (!path_info.ignore or path_info.nested_rules) {
                 var child_dir: ?Dir = if (fsys_e) |d| dir.?.openDir(d.getEntryName(), .{ .iterate = true }) catch |err| {
@@ -337,10 +378,13 @@ pub fn syncDirApplyRules(
 
                 const child_dir_iter: FileRecordMap.DirIterator = if (frmap_e) |fre| fre.kind.directory else .empty;
 
-                const res = if (path_info.nested_rules)
-                    self.syncDirApplyRules(full_path, child_dir, sync_op, child_dir_iter, itree_map, if (path_info.is_map_entry) level + 1 else level, allocator)
-                else
-                    self.syncDir(full_path, child_dir, sync_op, child_dir_iter, allocator);
+                const res = if (path_info.nested_rules) blk: {
+                    log.debug("syncDirApplyRules", .{});
+                    break :blk self.syncDirApplyRules(full_path, child_dir, sync_op, child_dir_iter, itree_map, if (path_info.is_map_entry) level + 1 else level, allocator);
+                } else blk: {
+                    log.debug("syncDir", .{});
+                    break :blk self.syncDir(full_path, child_dir, sync_op, child_dir_iter, allocator);
+                };
 
                 res catch |err| switch (err) {
                     SyncDirError.IncompleteTransaction => {
@@ -351,7 +395,7 @@ pub fn syncDirApplyRules(
                     SyncDirError.OutOfMemory => |e| return e,
                     else => continue,
                 };
-            }
+            } else log.debug("ignoring: {s}", .{full_path});
         } else {
             const file: ?File = if (fsys_e) |f| dir.?.openFile(f.getEntryName(), .{}) catch |err| {
                 log.err(open_file_error_notice, .{ full_path, err });
@@ -360,7 +404,9 @@ pub fn syncDirApplyRules(
             } else null;
             defer if (file) |f| f.close();
 
-            self.syncFileApplyRules(full_path, file, sync_op, frmap_dir_iter.sorted_map.file_records.getPtr(.borrowed(full_path)), itree_map, level) catch |err| switch (err) {
+            log.debug("syncFileApplyRules", .{});
+
+            self.syncFileApplyRules(full_path, file, sync_op, frmap_dir_iter.sorted_map.file_records.get(.borrowed(full_path)), itree_map, level) catch |err| switch (err) {
                 SyncFileError.IllegalCombination, SyncFileError.NoOp, SyncFileError.NoPushDeletedPullNew, SyncFileError.NoPushNewPullDeleted => continue,
                 SyncFileError.OutOfMemory => |e| return e,
                 else => {
