@@ -6,12 +6,12 @@ pub const proj_name: []const u8 = dergdrive.cli.command_exec.prog_name;
 
 const Conf = @This();
 
-pub const GetFileContentError = std.fs.File.StatError || std.mem.Allocator.Error || std.fs.File.ReadError;
-pub const GetFileContentFromPathError = GetFileContentError || std.fs.File.OpenError;
-pub const OpenOrCreateConfFileError = std.fs.Dir.MakeError || std.fs.Dir.OpenError || std.fs.Dir.StatError || std.fs.File.OpenError || std.mem.Allocator.Error || std.fs.File.ChmodError;
-pub const WriteConfFileError = OpenOrCreateConfFileError || std.fs.File.WriteError;
+pub const GetFileContentError = std.Io.File.StatError || std.mem.Allocator.Error || std.Io.Operation.FileReadStreaming.Error;
+pub const GetFileContentFromPathError = GetFileContentError || std.Io.File.OpenError;
+pub const OpenOrCreateConfFileError = std.Io.Dir.CreateDirPathOpenError || std.Io.Dir.OpenError || std.Io.Dir.StatError || std.Io.File.OpenError || std.mem.Allocator.Error || std.Io.File.SetPermissionsError;
+pub const WriteConfFileError = OpenOrCreateConfFileError || std.Io.File.WritePositionalError;
 pub const GetConfError = GetFileContentError || GetFileContentFromPathError || OpenOrCreateConfFileError;
-pub const SetError = GetFileContentError || OpenOrCreateConfFileError || std.fs.File.SeekError || std.fs.File.SetEndPosError || std.fs.File.WriteError;
+pub const SetError = GetFileContentError || OpenOrCreateConfFileError || std.Io.File.SeekError || std.Io.File.SetEndPosError || std.Io.File.WriteError;
 
 const pers_internal: []const u8 = "./share";
 const cache_internal: []const u8 = "./cache";
@@ -176,29 +176,29 @@ const g_conf_file_hierarchy: []const ConfFile = switch (builtin.os.tag) {
 const g_mfest_cache: ConfFile = .{ .nspace = .from(.{ .cache = .vol_local }), .sub_path = "manifest" };
 const g_oride_prefixes: ConfFile = .{ .nspace = .from(.{ .config = .vol_local }), .sub_path = "prefix-overrides.ini" };
 
-pub var g_conf: Conf = undefined;
-
 conf_file_default: ConfFile = g_conf_file_default,
 conf_file_hierarchy: []const ConfFile = g_conf_file_hierarchy,
 mfest_cache: ConfFile = g_mfest_cache,
 oride_prefixes: ConfFile = g_oride_prefixes,
 
 vol: []const u8,
+emap: *const std.process.Environ.Map,
 
-pub fn init(vol: []const u8) Conf {
-    return .{ .vol = vol };
+pub fn init(vol: []const u8, emap: *std.process.Environ.Map) Conf {
+    return .{ .vol = vol, .emap = emap };
 }
 
 pub fn expand(self: Conf, path: []const u8, allocator: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
     const home_expanded = blk: switch (builtin.os.tag) {
         .linux => {
             if (path.len > 0 and path[0] == '~') {
-                var home = std.posix.getenv("HOME");
-                if (home == null)
-                    home = std.posix.getenv("USERPROFILE");
+                const home: ?[]const u8 = "/home/vlcaak";
+                // var home = self.emap.get("HOME");
+                // if (home == null)
+                //     home = self.emap.get("USERPROFILE");
 
-                if (home == null)
-                    std.debug.panic("user home directory could not be inquired", .{});
+                // if (home == null)
+                //     std.debug.panic("user home directory could not be inquired", .{});
 
                 const slices: []const []const u8 = if (path.len > 2 and path[1] == '/') &.{ home.?, path[2..] } else &.{home.?};
                 break :blk try std.mem.join(allocator, "/", slices);
@@ -213,15 +213,15 @@ pub fn expand(self: Conf, path: []const u8, allocator: std.mem.Allocator) std.me
     return std.mem.replaceOwned(u8, allocator, home_expanded, "{vol}", self.vol);
 }
 
-fn getFileContentFromPath(path: []const u8, allocator: std.mem.Allocator) GetFileContentFromPathError![]const u8 {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
+fn getFileContentFromPath(path: []const u8, allocator: std.mem.Allocator, io: std.Io) GetFileContentFromPathError![]const u8 {
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
 
-    return getFileContent(file, allocator);
+    return getFileContent(file, allocator, io);
 }
 
-fn getFileContent(file: std.fs.File, allocator: std.mem.Allocator) GetFileContentError![]const u8 {
-    var reader = file.reader(&.{});
+fn getFileContent(file: std.Io.File, allocator: std.mem.Allocator, io: std.Io) GetFileContentError![]const u8 {
+    var reader = file.reader(io, &.{});
     return reader.interface.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
         std.Io.Reader.ShortError.ReadFailed => return reader.err.?,
         std.Io.Reader.LimitedAllocError.StreamTooLong => unreachable,
@@ -229,16 +229,16 @@ fn getFileContent(file: std.fs.File, allocator: std.mem.Allocator) GetFileConten
     };
 }
 
-pub fn getConf(self: Conf, conf_file: ConfFile, allocator: std.mem.Allocator) GetConfError![]const u8 {
-    return if (conf_file.always_create) getFileContent(try self.openOrCreateConfFile(conf_file, false, allocator), allocator) else {
+pub fn getConf(self: Conf, conf_file: ConfFile, allocator: std.mem.Allocator, io: std.Io) GetConfError![]const u8 {
+    return if (conf_file.always_create) getFileContent(try self.openOrCreateConfFile(conf_file, false, allocator, io), allocator, io) else {
         const full_path = try conf_file.getFullPath(self, allocator);
         defer allocator.free(full_path);
 
-        return getFileContentFromPath(full_path, allocator);
+        return getFileContentFromPath(full_path, allocator, io);
     };
 }
 
-pub fn openOrCreateConfFile(self: Conf, conf_file: ConfFile, truncate: bool, allocator: std.mem.Allocator) OpenOrCreateConfFileError!std.fs.File {
+pub fn openOrCreateConfFile(self: Conf, conf_file: ConfFile, truncate: bool, allocator: std.mem.Allocator, io: std.Io) OpenOrCreateConfFileError!std.Io.File {
     const full_path = try conf_file.getFullPath(self, allocator);
     defer allocator.free(full_path);
 
@@ -248,14 +248,14 @@ pub fn openOrCreateConfFile(self: Conf, conf_file: ConfFile, truncate: bool, all
     const file_delim = if (last_slash) |pos| pos + 1 else 0;
     const file_path = full_path[file_delim..];
 
-    var dir = try std.fs.cwd().makeOpenPath(dir_path, .{});
-    errdefer dir.close();
+    var dir = try std.Io.Dir.cwd().createDirPathOpen(io, dir_path, .{});
+    errdefer dir.close(io);
 
-    const file = try dir.createFile(file_path, .{ .read = true, .truncate = truncate });
-    errdefer file.close();
+    const file = try dir.createFile(io, file_path, .{ .read = true, .truncate = truncate });
+    errdefer file.close(io);
 
     switch (conf_file.nspace.nspace) {
-        .cache, .config, .pers => |nspace| if (nspace == .secret) try file.chmod(0o600),
+        .cache, .config, .pers => |nspace| if (nspace == .secret) try file.setPermissions(io, .fromMode(0o600)),
     }
 
     return file;

@@ -5,7 +5,7 @@ const expect = std.testing.expect;
 
 const IncludeTree = @This();
 
-pub const IterateDirError = std.fs.Dir.Iterator.Error || std.mem.Allocator.Error || std.fs.Dir.OpenError;
+pub const IterateDirError = std.Io.Dir.Iterator.Error || std.mem.Allocator.Error || std.Io.Dir.OpenError;
 pub const IterateFileRecordsError = std.mem.Allocator.Error;
 
 pub const FileNode = []const u8;
@@ -246,15 +246,15 @@ pub const TreeIterator = struct {
     //  NOTE: but I kinda like mess I caused by not wanting to implement my own sort in place :3
     pub fn sortLevelFromConsumedNode(self: TreeIterator) std.mem.Allocator.Error!void {
         var iter = self.iterateLevelledFromConsumedNode() orelse return;
-        var hmap: std.StringArrayHashMap(void) = .init(self.allocator);
-        defer hmap.deinit();
+        var hmap: std.array_hash_map.String(void) = .empty;
+        defer hmap.deinit(self.allocator);
 
         const count = iter.count();
         if (count == 0)
             return;
 
         var iter_cpy = iter;
-        try hmap.ensureTotalCapacity(count);
+        try hmap.ensureTotalCapacity(self.allocator, count);
         for (0..count) |_| {
             hmap.putAssumeCapacityNoClobber(iter_cpy.next().?.path(), {});
         }
@@ -360,11 +360,12 @@ flat_tree: union(enum) {
     map: std.StringArrayHashMapUnmanaged(MapNode),
 } = .{ .tree = .empty },
 allocator: std.mem.Allocator,
-root_dir: std.fs.Dir,
+io: std.Io,
+root_dir: std.Io.Dir,
 rules: RuleIterator,
 
-pub fn init(root_dir: std.fs.Dir, rule_text: []const u8, allocator: std.mem.Allocator) IncludeTree {
-    return .{ .allocator = allocator, .root_dir = root_dir, .rules = .init(rule_text) };
+pub fn init(root_dir: std.Io.Dir, rule_text: []const u8, allocator: std.mem.Allocator, io: std.Io) IncludeTree {
+    return .{ .allocator = allocator, .io = io, .root_dir = root_dir, .rules = .init(rule_text) };
 }
 
 pub fn deinit(self: *IncludeTree) void {
@@ -466,10 +467,10 @@ fn addMapNode(self: *IncludeTree, path: []const u8, node: MapNode) std.mem.Alloc
     self.flat_tree.map.putAssumeCapacity(path, node);
 }
 
-fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, level: usize, path: []const u8) IterateDirError!usize {
+fn iterateDir(self: *IncludeTree, dir: std.Io.Dir, rule_iter: RuleIterator, level: usize, path: []const u8) IterateDirError!usize {
     var num_nodes_added: usize = 0;
     var iter = dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(self.io)) |entry| {
         const path_chunks: []const []const u8 = if (path.len == 0) &.{entry.name} else &.{ path, entry.name };
 
         const FullPath = struct {
@@ -526,11 +527,11 @@ fn iterateDir(self: *IncludeTree, dir: std.fs.Dir, rule_iter: RuleIterator, leve
         if (entry.kind == .directory) {
             const new_level: usize = if (node_added) level + 1 else level;
             if (canHaveChildren(full_path.path, match_iter.rules, new_level)) {
-                var child_dir = dir.openDir(entry.name, .{ .iterate = true }) catch |err| {
+                var child_dir = dir.openDir(self.io, entry.name, .{ .iterate = true }) catch |err| {
                     log.warn("Couldn't open dir \"{s}\" due to error: {t}.", .{ full_path.path, err });
                     continue;
                 };
-                defer child_dir.close();
+                defer child_dir.close(self.io);
 
                 const child_iter = if (node_added) match_iter.rules else rule_iter;
                 const child_dir_nodes = try self.iterateDir(child_dir, child_iter, new_level, full_path.path);

@@ -26,7 +26,7 @@ pub const ChunkType = enum {
     destination,
     payload,
 
-    const PackedStrT = @Type(.{ .int = .{ .bits = 8 * header.header_title_size, .signedness = .unsigned } });
+    const PackedStrT = @Int(.unsigned, 8 * header.header_title_size);
     fn packedString(title: [header.header_title_size]u8) PackedStrT {
         return std.mem.readInt(PackedStrT, &title, .little);
     }

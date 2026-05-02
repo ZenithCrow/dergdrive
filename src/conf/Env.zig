@@ -4,7 +4,7 @@ const Conf = @import("Conf.zig");
 
 const Env = @This();
 
-pub const StoreEnvsError = std.mem.Allocator.Error || Conf.OpenOrCreateConfFileError || std.fs.File.WriteError;
+pub const StoreEnvsError = std.mem.Allocator.Error || Conf.OpenOrCreateConfFileError || std.Io.File.WriteError;
 
 const log = std.log.scoped(.@"conf/Env");
 
@@ -45,17 +45,19 @@ const ConfFileContext = struct {
     }
 };
 
-env_registry: std.StringArrayHashMap(EnvValue),
-modified_envs: std.ArrayHashMap(Conf.ConfFile, void, ConfFileContext, true),
+env_registry: std.array_hash_map.String(EnvValue),
+modified_envs: std.array_hash_map.Custom(Conf.ConfFile, void, ConfFileContext, true),
 allocator: std.mem.Allocator,
+io: std.Io,
 conf: Conf,
 
-pub fn init(conf: Conf, allocator: std.mem.Allocator) Env {
+pub fn init(conf: Conf, allocator: std.mem.Allocator, io: std.Io) Env {
     return .{
         .conf = conf,
-        .env_registry = .init(allocator),
-        .modified_envs = .initContext(allocator, .{ .allocator = allocator, .conf = conf }),
+        .env_registry = .empty,
+        .modified_envs = .empty,
         .allocator = allocator,
+        .io = io,
     };
 }
 
@@ -66,14 +68,14 @@ pub fn deinit(self: *Env) void {
         self.allocator.free(kv.value_ptr.val);
     }
 
-    self.env_registry.deinit();
-    self.modified_envs.deinit();
+    self.env_registry.deinit(self.allocator);
+    self.modified_envs.deinit(self.allocator);
 }
 
 pub fn loadEnvs(self: *Env) std.mem.Allocator.Error!void {
     for (self.conf.conf_file_hierarchy) |env_conf_file| {
-        var env_iter: Conf.KeyValueIterator = .init(self.conf.getConf(env_conf_file, self.allocator) catch |err| switch (err) {
-            Conf.GetConfError.OutOfMemory => return Conf.GetConfError.OutOfMemory,
+        var env_iter: Conf.KeyValueIterator = .init(self.conf.getConf(env_conf_file, self.allocator, self.io) catch |err| switch (err) {
+            Conf.GetConfError.OutOfMemory => |e| return e,
             Conf.GetConfError.FileNotFound => continue,
             else => {
                 log.warn("Config file {f} could not be opened due to error: {t}.", .{ env_conf_file, err });
@@ -83,7 +85,7 @@ pub fn loadEnvs(self: *Env) std.mem.Allocator.Error!void {
         defer self.allocator.free(env_iter.line_iter.buffer);
 
         while (env_iter.next()) |kv_pair| {
-            try self.env_registry.put(try self.allocator.dupe(u8, kv_pair.key), .{
+            try self.env_registry.put(self.allocator, try self.allocator.dupe(u8, kv_pair.key), .{
                 .val = try self.allocator.dupe(u8, kv_pair.value),
                 .conf_file = env_conf_file,
             });
@@ -98,7 +100,7 @@ pub fn storeEnvs(self: Env) StoreEnvsError!void {
 
     const env_count = self.modified_envs.count();
 
-    const env_writers = try self.allocator.alloc(std.fs.File.Writer, env_count);
+    const env_writers = try self.allocator.alloc(std.Io.File.Writer, env_count);
     defer self.allocator.free(env_writers);
 
     for (self.modified_envs.keys(), 0..) |env, i| {
@@ -113,7 +115,7 @@ pub fn storeEnvs(self: Env) StoreEnvsError!void {
 
     var iter = self.env_registry.iterator();
     while (iter.next()) |kv| {
-        const w: *std.fs.File.Writer = &env_writers[self.modified_envs.getIndex(kv.value_ptr.conf_file) orelse continue];
+        const w: *std.Io.File.Writer = &env_writers[self.modified_envs.getIndex(kv.value_ptr.conf_file) orelse continue];
         w.interface.print("{s}={s}\n", .{ kv.key_ptr.*, kv.value_ptr.val }) catch return w.err.?;
     }
 
@@ -126,14 +128,14 @@ pub fn get(self: Env, key: []const u8) ?[]const u8 {
     return if (self.env_registry.get(key)) |env_val| env_val.val else null;
 }
 
-pub const GetWithCwdResultError = std.mem.Allocator.Error || std.fs.File.OpenError;
+pub const GetWithCwdResultError = std.mem.Allocator.Error || std.Io.File.OpenError;
 
 pub const GetWithCwdResult = struct {
     val: []const u8,
-    cwd: std.fs.Dir,
+    cwd: std.Io.Dir,
 };
 
-pub fn getWithCwd(self: Env, key: []const u8, iterate: bool) GetWithCwdResultError!?GetWithCwdResult {
+pub fn getWithCwd(self: Env, key: []const u8, iterate: bool, io: std.Io) GetWithCwdResultError!?GetWithCwdResult {
     if (self.env_registry.get(key)) |env_val| {
         const full_path = try env_val.conf_file.getFullPath(self.conf, self.allocator);
         defer self.allocator.free(full_path);
@@ -142,7 +144,7 @@ pub fn getWithCwd(self: Env, key: []const u8, iterate: bool) GetWithCwdResultErr
 
         return .{
             .val = env_val.val,
-            .cwd = if (last_slash) |l| try std.fs.cwd().openDir(full_path[0..l], .{ .iterate = iterate }) else std.fs.cwd(),
+            .cwd = if (last_slash) |l| try std.Io.Dir.cwd().openDir(io, full_path[0..l], .{ .iterate = iterate }) else std.Io.Dir.cwd(),
         };
     } else return null;
 }

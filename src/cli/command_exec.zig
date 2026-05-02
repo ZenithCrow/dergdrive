@@ -41,18 +41,18 @@ const command_map: std.StaticStringMap(Command) = .initComptime(command_tups);
 
 const log = std.log.scoped(.@"cli/command_exec");
 
-pub fn exec(args: []const []const u8, allocator: std.mem.Allocator) ExecError!void {
+pub fn exec(args: []const []const u8, emap: *std.process.Environ.Map, allocator: std.mem.Allocator, io: std.Io) ExecError!void {
     if (args.len == 0) {
-        printHelp();
+        printHelp(io);
         return ExecError.NoArgsProvided;
     }
 
     if (command_map.get(args[0])) |command| {
         if (parser.indexOfOption(args, help_opt.option.long, help_opt.option.short) != null) {
-            printCmdHelp(command);
-        } else try command.exec_fn(args[1..], allocator);
+            printCmdHelp(command, io);
+        } else try command.exec_fn(args[1..], emap, allocator, io);
     } else {
-        printHelp();
+        printHelp(io);
         return ExecError.UnknownCommand;
     }
 }
@@ -108,12 +108,12 @@ fn printOptionEvenlySpaced(w: *std.Io.Writer, option: Option) std.Io.Writer.Erro
 
 const param_notice = "Parameters in capitals are user provided. If enclosed in brackets [], the parameter is optional and/or has a default value.";
 
-pub fn printHelp() void {
+pub fn printHelp(io: std.Io) void {
     std.log.info(param_notice, .{});
     std.log.info("Usage: {s} COMMAND [OPTIONS]", .{prog_name});
 
     var w_buf: [512]u8 = undefined;
-    var stderr_w = std.fs.File.stderr().writerStreaming(&w_buf);
+    var stderr_w = std.Io.File.stderr().writerStreaming(io, &w_buf);
     stderr_w.interface.writeAll(
         \\
         \\Commands:
@@ -141,12 +141,12 @@ pub fn printHelp() void {
     stderr_w.interface.flush() catch {};
 }
 
-pub fn printCmdHelp(cmd: Command) void {
+pub fn printCmdHelp(cmd: Command, io: std.Io) void {
     std.log.info(param_notice, .{});
     std.log.info("Usage: {s} {s}", .{ prog_name, cmd.usage });
 
     var w_buf: [512]u8 = undefined;
-    var stderr_w = std.fs.File.stderr().writerStreaming(&w_buf);
+    var stderr_w = std.Io.File.stderr().writerStreaming(io, &w_buf);
     stderr_w.interface.print(
         \\
         \\Brief:
@@ -216,14 +216,14 @@ pub const ParamContext = struct {
 
 const load_evs_err_notice = "Failed to load envs due to error: {t}.";
 
-pub fn initBroadContext(args: []const []const u8, allocator: std.mem.Allocator) dergdrive.cli.Command.ExecError!ParamContext {
+pub fn initBroadContext(args: []const []const u8, emap: *std.process.Environ.Map, allocator: std.mem.Allocator, io: std.Io) dergdrive.cli.Command.ExecError!ParamContext {
     const conf = allocator.create(dergdrive.conf.Conf) catch |err| {
         log.err(load_evs_err_notice, .{err});
         return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
     };
     errdefer allocator.destroy(conf);
 
-    conf.* = .init("");
+    conf.* = .init("", emap);
 
     const env = allocator.create(dergdrive.conf.Env) catch |err| {
         log.err(load_evs_err_notice, .{err});
@@ -231,7 +231,7 @@ pub fn initBroadContext(args: []const []const u8, allocator: std.mem.Allocator) 
     };
     errdefer allocator.destroy(env);
 
-    env.* = .init(conf.*, allocator);
+    env.* = .init(conf.*, allocator, io);
     errdefer env.deinit();
 
     env.loadEnvs() catch |err| {
@@ -240,11 +240,11 @@ pub fn initBroadContext(args: []const []const u8, allocator: std.mem.Allocator) 
     };
 
     const vol = if (getCliThenConfigValue(env, vol_opt.default_vol_opt_name, args, vol_opt.option)) |v| blk: {
-        conf.* = .init(v);
+        conf.* = .init(v, emap);
 
         // replace env with newer one having volume context
         env.deinit();
-        env.* = .init(conf.*, allocator);
+        env.* = .init(conf.*, allocator, io);
         env.loadEnvs() catch |err| {
             log.err(load_evs_err_notice, .{err});
             return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
@@ -268,25 +268,25 @@ pub fn getCliThenConfigValue(env: *const dergdrive.conf.Env, config_opt_name: []
 }
 
 pub const ParamContextValues = struct {
-    root_dir_iterable: std.fs.Dir,
+    root_dir_iterable: std.Io.Dir,
     rule_text: []const u8,
 
-    pub fn init(ctx: ParamContext, allocator: std.mem.Allocator) !ParamContextValues {
+    pub fn init(ctx: ParamContext, allocator: std.mem.Allocator, io: std.Io) !ParamContextValues {
         const root_path = if (ctx.root_path) |v| v else {
             log.err(Option.opt_not_set_template, .{ "Root directory", @"root-dir_opt".root_dir_opt_name, @"root-dir_opt".option.long });
             return error.RootDirNotSet;
         };
 
-        var root_dir_wd_res = try ctx.env.getWithCwd(@"include-rules_opt".include_rules_opt_name, false);
+        var root_dir_wd_res = try ctx.env.getWithCwd(@"include-rules_opt".include_rules_opt_name, false, io);
         const root_dir_not_cli = parser.getAssociatedValue(ctx.args, @"include-rules_opt".option.long, @"include-rules_opt".option.short, @"include-rules_opt".option.value.?.eql_sign) == null;
         const root_dir_wd = if (root_dir_not_cli and root_dir_wd_res != null)
             root_dir_wd_res.?.cwd
         else
-            std.fs.cwd();
+            std.Io.Dir.cwd();
 
-        defer if (root_dir_wd_res) |*res| res.cwd.close();
+        defer if (root_dir_wd_res) |*res| res.cwd.close(io);
 
-        const root_dir = root_dir_wd.openDir(root_path, .{ .iterate = true }) catch |err| {
+        const root_dir = root_dir_wd.openDir(io, root_path, .{ .iterate = true }) catch |err| {
             log.err("Couldn't open root directory {s} due to error: {t}.", .{ root_path, err });
             return error.RootDirOpenFailed;
         };
@@ -296,25 +296,25 @@ pub const ParamContextValues = struct {
             return error.IncludeRulesFileNotSet;
         };
 
-        var include_rules_wd_res = try ctx.env.getWithCwd(@"include-rules_opt".include_rules_opt_name, false);
+        var include_rules_wd_res = try ctx.env.getWithCwd(@"include-rules_opt".include_rules_opt_name, false, io);
         const include_rules_not_cli = parser.getAssociatedValue(ctx.args, @"include-rules_opt".option.long, @"include-rules_opt".option.short, @"include-rules_opt".option.value.?.eql_sign) == null;
         const include_rules_wd = if (include_rules_not_cli and include_rules_wd_res != null)
             include_rules_wd_res.?.cwd
         else
-            std.fs.cwd();
+            std.Io.Dir.cwd();
 
-        defer if (include_rules_wd_res) |*res| res.cwd.close();
+        defer if (include_rules_wd_res) |*res| res.cwd.close(io);
 
         const rule_text = blk: {
-            const rule_file = include_rules_wd.openFile(include_rules_path, .{}) catch |err| {
+            const rule_file = include_rules_wd.openFile(io, include_rules_path, .{}) catch |err| {
                 log.err("Couldn't open include rules file {s} due to error: {t}.", .{ include_rules_path, err });
                 return error.RuleFileOpenFailed;
             };
-            defer rule_file.close();
+            defer rule_file.close(io);
 
-            const size = try rule_file.getEndPos();
+            const size = try rule_file.length(io);
 
-            var fr = rule_file.reader(&.{});
+            var fr = rule_file.reader(io, &.{});
             break :blk try fr.interface.readAlloc(allocator, size);
         };
 
@@ -324,8 +324,8 @@ pub const ParamContextValues = struct {
         };
     }
 
-    pub fn deinit(self: *ParamContextValues, allocator: std.mem.Allocator) void {
-        self.root_dir_iterable.close();
+    pub fn deinit(self: *ParamContextValues, allocator: std.mem.Allocator, io: std.Io) void {
+        self.root_dir_iterable.close(io);
         allocator.free(self.rule_text);
     }
 };

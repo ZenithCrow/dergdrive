@@ -5,7 +5,7 @@ const crypt = @import("dergdrive").crypt;
 
 const FileRecordMap = @import("FileRecordMap.zig");
 
-const StoreLocalPrefixOverridesError = Conf.OpenOrCreateConfFileError || std.fs.File.WriteError;
+const StoreLocalPrefixOverridesError = Conf.OpenOrCreateConfFileError || std.Io.File.WriteError;
 const Manifest = @This();
 
 const log = std.log.scoped(.@"client/track/Manifest");
@@ -13,7 +13,7 @@ const log = std.log.scoped(.@"client/track/Manifest");
 const local_prefix_disclaimer: []const u8 = @embedFile("local-prefix-notice.txt");
 
 const LoadLocalPrefixOverridesError = Conf.GetConfError || std.mem.Allocator.Error;
-const GetSyncTimestampFromCachedManifestError = Conf.OpenOrCreateConfFileError || std.fs.File.ReadError || LoadFromManifestFileError;
+const GetSyncTimestampFromCachedManifestError = Conf.OpenOrCreateConfFileError || std.Io.File.ReadError || LoadFromManifestFileError;
 const LoadFromManifestFileError = error{ NotLoaded, Illformed };
 const LoadManifestError = LoadFromManifestFileError || std.mem.Allocator.Error;
 const StoreManifestError = LoadFromManifestFileError || std.Io.Writer.Error;

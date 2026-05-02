@@ -7,8 +7,8 @@ pub const command: cli.Command = .{
     .usage = "help",
     .desc = "Print this help and exit",
     .exec_fn = struct {
-        pub fn execFn(_: []const []const u8, _: std.mem.Allocator) cli.Command.ExecError!void {
-            cli.command_exec.printHelp();
+        pub fn execFn(_: []const []const u8, _: *std.process.Environ.Map, _: std.mem.Allocator, io: std.Io) cli.Command.ExecError!void {
+            cli.command_exec.printHelp(io);
         }
     }.execFn,
     .options = &.{},

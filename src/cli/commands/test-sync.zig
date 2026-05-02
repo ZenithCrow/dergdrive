@@ -18,8 +18,8 @@ pub const command: cli.Command = .{
     .usage = "test-sync [OPTIONS]",
     .desc = "(debug) Test syncing works as expected.",
     .exec_fn = struct {
-        pub fn execFn(args: []const []const u8, allocator: std.mem.Allocator) cli.Command.ExecError!void {
-            return testSync(args, allocator) catch |err| switch (err) {
+        pub fn execFn(args: []const []const u8, emap: *std.process.Environ.Map, allocator: std.mem.Allocator, io: std.Io) cli.Command.ExecError!void {
+            return testSync(args, emap, allocator, io) catch |err| switch (err) {
                 cli.Command.ExecError.InvalidSyntax => @errorCast(err),
                 cli.Command.ExecError.ReturnStatusFailure => @errorCast(err),
                 else => blk: {
@@ -36,15 +36,15 @@ pub const command: cli.Command = .{
     },
 };
 
-fn testSync(args: []const []const u8, allocator: std.mem.Allocator) !void {
-    const ctx = try cli.command_exec.initBroadContext(args, allocator);
+fn testSync(args: []const []const u8, emap: *std.process.Environ.Map, allocator: std.mem.Allocator, io: std.Io) !void {
+    const ctx = try cli.command_exec.initBroadContext(args, emap, allocator, io);
     defer ctx.deinit(allocator);
 
-    var param_vals: cli.command_exec.ParamContextValues = try .init(ctx, allocator);
-    defer param_vals.deinit(allocator);
+    var param_vals: cli.command_exec.ParamContextValues = try .init(ctx, allocator, io);
+    defer param_vals.deinit(allocator, io);
     // beyond this point, `root_path` and `include_rules_path` are not null
 
-    var tree: IncludeTree = .init(param_vals.root_dir_iterable, param_vals.rule_text, allocator);
+    var tree: IncludeTree = .init(param_vals.root_dir_iterable, param_vals.rule_text, allocator, io);
     defer tree.deinit();
 
     tree.buildMap() catch |err| {
@@ -86,7 +86,7 @@ fn testSync(args: []const []const u8, allocator: std.mem.Allocator) !void {
 
     const frmap_dir_iter: FileRecordMap.DirIterator = .{ .dir_range = .{ 0, file_record_map.file_records.count() }, .parent_path = "", .sorted_map = &file_record_map };
 
-    try file_reader.syncDirApplyRules("", param_vals.root_dir_iterable, sync_op, frmap_dir_iter, tree, 1, allocator);
+    try file_reader.syncDirApplyRules("", param_vals.root_dir_iterable, sync_op, frmap_dir_iter, tree, 1, allocator, io);
 }
 
 const file_record_keys = [_][]const u8{

@@ -17,8 +17,8 @@ pub const command: cli.Command = .{
     .usage = "ls-include [OPTIONS]",
     .desc = "Show a tree of included and/or ignored files in a volume",
     .exec_fn = struct {
-        pub fn execFn(args: []const []const u8, allocator: std.mem.Allocator) cli.Command.ExecError!void {
-            return lsInclude(args, allocator) catch |err| switch (err) {
+        pub fn execFn(args: []const []const u8, emap: *std.process.Environ.Map, allocator: std.mem.Allocator, io: std.Io) cli.Command.ExecError!void {
+            return lsInclude(args, emap, allocator, io) catch |err| switch (err) {
                 cli.Command.ExecError.InvalidSyntax => @errorCast(err),
                 cli.Command.ExecError.ReturnStatusFailure => @errorCast(err),
                 else => blk: {
@@ -73,20 +73,20 @@ const Mode = enum {
     traverse,
 };
 
-inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !void {
-    const ctx = try cli.command_exec.initBroadContext(args, allocator);
+inline fn lsInclude(args: []const []const u8, emap: *std.process.Environ.Map, allocator: std.mem.Allocator, io: std.Io) !void {
+    const ctx = try cli.command_exec.initBroadContext(args, emap, allocator, io);
     defer ctx.deinit(allocator);
 
-    var param_vals: cli.command_exec.ParamContextValues = try .init(ctx, allocator);
-    defer param_vals.deinit(allocator);
+    var param_vals: cli.command_exec.ParamContextValues = try .init(ctx, allocator, io);
+    defer param_vals.deinit(allocator, io);
     // beyond this point, `root_path` and `include_rules_path` are not null
 
-    var tree: IncludeTree = .init(param_vals.root_dir_iterable, param_vals.rule_text, allocator);
+    var tree: IncludeTree = .init(param_vals.root_dir_iterable, param_vals.rule_text, allocator, io);
     defer tree.deinit();
 
     var w_buf: [512]u8 = undefined;
-    var stdout_w = std.fs.File.stdout().writerStreaming(&w_buf);
-    const decorate = stdout_w.file.getOrEnableAnsiEscapeSupport();
+    var stdout_w = std.Io.File.stdout().writerStreaming(io, &w_buf);
+    const decorate = try stdout_w.file.supportsAnsiEscapeCodes(io);
 
     try cli.termfmt.printDecorated(&stdout_w.interface, decorate, &.{ .bold, .blue }, "{s}\n", .{ctx.root_path.?});
 
@@ -152,12 +152,13 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
                     list_ignore: bool,
                     writer: *std.Io.Writer,
                     allocator: std.mem.Allocator,
+                    io: std.Io,
                 };
 
-                pub fn iteratePrintDirectory(dir: std.fs.Dir, path: []const u8, level: usize, ipt_ctx: *const IptCtx) !void {
+                pub fn iteratePrintDirectory(dir: std.Io.Dir, path: []const u8, level: usize, ipt_ctx: *const IptCtx) !void {
                     var iterator = dir.iterate();
                     const EntryT = struct {
-                        kind: std.fs.Dir.Entry.Kind,
+                        kind: std.Io.File.Kind,
                         full_path: []const u8,
                         map_include: ?bool,
                         is_included: bool,
@@ -170,7 +171,7 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
                     var dir_list: std.ArrayListUnmanaged(EntryT) = .empty;
                     defer dir_list.deinit(ipt_ctx.allocator);
 
-                    while (try iterator.next()) |entry| {
+                    while (try iterator.next(ipt_ctx.io)) |entry| {
                         switch (entry.kind) {
                             .directory, .file => |k| {
                                 const full_path = try std.mem.join(ipt_ctx.allocator, "/", if (path.len == 0) &.{entry.name} else &.{ path, entry.name });
@@ -239,7 +240,7 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
 
                         if (item.kind == .directory and !lvl_empty) {
                             var err: ?anyerror = null;
-                            if (dir.openDir(entry_name, .{ .iterate = true })) |d| {
+                            if (dir.openDir(ipt_ctx.io, entry_name, .{ .iterate = true })) |d| {
                                 if (iteratePrintDirectory(d, item.full_path, if (item.map_include != null) level + 1 else level, ipt_ctx)) |_| {} else |e| err = e;
                             } else |e| err = e;
 
@@ -285,6 +286,7 @@ inline fn lsInclude(args: []const []const u8, allocator: std.mem.Allocator) !voi
                 .list_ignore = cli.parser.indexOfOption(args, list_ignore_opt.long, list_ignore_opt.short) != null,
                 .writer = &stdout_w.interface,
                 .allocator = allocator,
+                .io = io,
             };
 
             try DirIter.iteratePrintDirectory(param_vals.root_dir_iterable, "", 1, &ipt_ctx);
