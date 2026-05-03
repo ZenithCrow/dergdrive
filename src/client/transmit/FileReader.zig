@@ -19,7 +19,7 @@ const FileReader = @This();
 raw_file_adapter: *pipe_adapter.RawFilePipeAdapter,
 req_stor: *RequestStorage,
 
-pub const PipeFileError = File.LengthError || File.ReadStreamingError;
+pub const PipeFileError = File.LengthError || File.Reader.Error;
 pub const PipeDirError = error{IncompleteTransaction} || std.mem.Allocator.Error;
 pub const FlagError = error{
     NoOp,

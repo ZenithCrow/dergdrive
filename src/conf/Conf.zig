@@ -6,12 +6,12 @@ pub const proj_name: []const u8 = dergdrive.cli.command_exec.prog_name;
 
 const Conf = @This();
 
-pub const GetFileContentError = std.Io.File.StatError || std.mem.Allocator.Error || std.Io.Operation.FileReadStreaming.Error;
+pub const GetFileContentError = std.Io.File.StatError || std.mem.Allocator.Error || std.Io.File.Reader.Error;
 pub const GetFileContentFromPathError = GetFileContentError || std.Io.File.OpenError;
 pub const OpenOrCreateConfFileError = std.Io.Dir.CreateDirPathOpenError || std.Io.Dir.OpenError || std.Io.Dir.StatError || std.Io.File.OpenError || std.mem.Allocator.Error || std.Io.File.SetPermissionsError;
 pub const WriteConfFileError = OpenOrCreateConfFileError || std.Io.File.WritePositionalError;
 pub const GetConfError = GetFileContentError || GetFileContentFromPathError || OpenOrCreateConfFileError;
-pub const SetError = GetFileContentError || OpenOrCreateConfFileError || std.Io.File.SeekError || std.Io.File.SetEndPosError || std.Io.File.WriteError;
+pub const SetError = GetFileContentError || OpenOrCreateConfFileError || std.Io.File.SeekError || std.Io.File.SetLengthError || std.Io.File.Writer.Error;
 
 const pers_internal: []const u8 = "./share";
 const cache_internal: []const u8 = "./cache";
@@ -261,17 +261,17 @@ pub fn openOrCreateConfFile(self: Conf, conf_file: ConfFile, truncate: bool, all
     return file;
 }
 
-pub fn writeConfFile(self: Conf, conf_file: ConfFile, truncate: bool, data: []const u8, allocator: std.mem.Allocator) WriteConfFileError!void {
-    const file = try self.openOrCreateConfFile(conf_file, truncate, allocator);
-    errdefer file.close();
+pub fn writeConfFile(self: Conf, conf_file: ConfFile, truncate: bool, data: []const u8, allocator: std.mem.Allocator, io: std.Io) WriteConfFileError!void {
+    const file = try self.openOrCreateConfFile(conf_file, truncate, allocator, io);
+    errdefer file.close(io);
 
-    var writer = file.writer(&.{});
+    var writer = file.writer(io, &.{});
     return writer.interface.writeAll(data) catch writer.err.?;
 }
 
 /// use env layer instead of this access
-pub fn get(self: Conf, env_file: ConfFile, key: []const u8, allocator: std.mem.Allocator) GetConfError!?[]const u8 {
-    const iter: KeyValueIterator = .init(try self.getConf(env_file, allocator));
+pub fn get(self: Conf, env_file: ConfFile, key: []const u8, allocator: std.mem.Allocator, io: std.Io) GetConfError!?[]const u8 {
+    const iter: KeyValueIterator = .init(try self.getConf(env_file, allocator, io));
     defer allocator.free(iter.line_iter.buffer);
     return if (getFromIter(iter, key)) |value| try allocator.dupe(u8, value) else null;
 }
@@ -287,14 +287,14 @@ pub fn getFromIter(kv_iter: KeyValueIterator, key: []const u8) ?[]const u8 {
 }
 
 /// use env layer instead of this accesss
-pub fn set(self: Conf, env_file: ConfFile, key: []const u8, value: []const u8, allocator: std.mem.Allocator) SetError!void {
-    const file = try self.openOrCreateConfFile(env_file, false, allocator);
-    defer file.close();
-    const buf = try getFileContent(file, allocator);
+pub fn set(self: Conf, env_file: ConfFile, key: []const u8, value: []const u8, allocator: std.mem.Allocator, io: std.Io) SetError!void {
+    const file = try self.openOrCreateConfFile(env_file, false, allocator, io);
+    defer file.close(io);
+    const buf = try getFileContent(file, allocator, io);
     defer allocator.free(buf);
     var iter: KeyValueIterator = .init(buf);
 
-    var writer = file.writer(&.{});
+    var writer = file.writer(io, &.{});
 
     var key_len: usize = 0;
     var val_len: usize = 0;
@@ -318,9 +318,9 @@ pub fn set(self: Conf, env_file: ConfFile, key: []const u8, value: []const u8, a
         writer.seekTo(index + key_len + 1) catch return writer.seek_err.?;
         writer.interface.writeAll(value) catch return writer.err.?;
         writer.interface.writeAll(buf[tail_index..]) catch return writer.err.?;
-        try file.setEndPos(new_len);
+        try file.setLength(io, new_len);
     } else {
-        const end = try file.getEndPos();
+        const end = try file.length(io);
         const line_break = buf.len > 0 and buf[buf.len - 1] == '\n';
 
         writer.seekTo(end) catch return writer.seek_err.?;

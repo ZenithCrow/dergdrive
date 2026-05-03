@@ -1,5 +1,5 @@
 const std = @import("std");
-const Mutex = std.Thread.Mutex;
+const Mutex = std.Io.Mutex;
 
 const Manifest = @import("Manifest.zig");
 

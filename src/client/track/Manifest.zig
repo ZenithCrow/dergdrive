@@ -5,7 +5,7 @@ const crypt = @import("dergdrive").crypt;
 
 const FileRecordMap = @import("FileRecordMap.zig");
 
-const StoreLocalPrefixOverridesError = Conf.OpenOrCreateConfFileError || std.Io.File.WriteError;
+const StoreLocalPrefixOverridesError = Conf.OpenOrCreateConfFileError || std.Io.File.Writer.Error;
 const Manifest = @This();
 
 const log = std.log.scoped(.@"client/track/Manifest");
@@ -13,7 +13,7 @@ const log = std.log.scoped(.@"client/track/Manifest");
 const local_prefix_disclaimer: []const u8 = @embedFile("local-prefix-notice.txt");
 
 const LoadLocalPrefixOverridesError = Conf.GetConfError || std.mem.Allocator.Error;
-const GetSyncTimestampFromCachedManifestError = Conf.OpenOrCreateConfFileError || std.Io.File.ReadError || LoadFromManifestFileError;
+const GetSyncTimestampFromCachedManifestError = Conf.OpenOrCreateConfFileError || std.Io.File.Reader.Error || LoadFromManifestFileError;
 const LoadFromManifestFileError = error{ NotLoaded, Illformed };
 const LoadManifestError = LoadFromManifestFileError || std.mem.Allocator.Error;
 const StoreManifestError = LoadFromManifestFileError || std.Io.Writer.Error;
@@ -111,19 +111,21 @@ mfest_file: ?[]const u8 = null,
 is_local: bool = true,
 sync_tstamp: ?Timestamp = null,
 file_record_map: FileRecordMap,
-local_pfixes: std.AutoArrayHashMap(u32, []const u8),
-oride_pfixes: std.AutoArrayHashMap(u32, []const u8),
-unassigned_pfixes: std.array_list.Managed(UnassignedPrefix),
+local_pfixes: std.array_hash_map.Auto(u32, []const u8),
+oride_pfixes: std.array_hash_map.Auto(u32, []const u8),
+unassigned_pfixes: std.ArrayList(UnassignedPrefix),
 allocator: std.mem.Allocator,
+io: std.Io,
 
-pub fn init(conf: Conf, allocator: std.mem.Allocator) Manifest {
+pub fn init(conf: Conf, allocator: std.mem.Allocator, io: std.Io) Manifest {
     return .{
         .conf = conf,
         .file_record_map = .init(allocator),
-        .local_pfixes = .init(allocator),
-        .oride_pfixes = .init(allocator),
-        .unassigned_pfixes = .init(allocator),
+        .local_pfixes = .empty,
+        .oride_pfixes = .empty,
+        .unassigned_pfixes = .empty,
         .allocator = allocator,
+        .io = io,
     };
 }
 
@@ -136,15 +138,15 @@ pub fn deinit(self: *Manifest) void {
     for (self.local_pfixes.values()) |value| {
         self.allocator.free(value);
     }
-    self.local_pfixes.deinit();
+    self.local_pfixes.deinit(self.allocator);
 
-    self.oride_pfixes.deinit();
+    self.oride_pfixes.deinit(self.allocator);
 
     for (self.unassigned_pfixes.items) |pf| {
         self.allocator.free(pf.key);
         self.allocator.free(pf.val);
     }
-    self.unassigned_pfixes.deinit();
+    self.unassigned_pfixes.deinit(self.allocator);
 }
 
 pub fn getSyncTimestamp(self: Manifest) LoadFromManifestFileError!Timestamp {
@@ -155,13 +157,13 @@ pub fn getSyncTimestamp(self: Manifest) LoadFromManifestFileError!Timestamp {
 }
 
 pub fn getSyncTimestampFromCachedManifest(self: Manifest) GetSyncTimestampFromCachedManifestError!?Timestamp {
-    const file = self.conf.openOrCreateConfFile(self.conf.mfest_cache, false, self.allocator) catch |err| switch (err) {
+    const file = self.conf.openOrCreateConfFile(self.conf.mfest_cache, false, self.allocator, self.io) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
 
     var buf: [@sizeOf(i128) + @sizeOf(u32)]u8 = undefined;
-    var reader = file.reader(&.{});
+    var reader = file.reader(self.io, &.{});
     reader.interface.readSliceAll(&buf) catch |err| switch (err) {
         error.EndOfStream => {},
         error.ReadFailed => return reader.err.?,
@@ -173,7 +175,7 @@ pub fn getSyncTimestampFromCachedManifest(self: Manifest) GetSyncTimestampFromCa
 }
 
 pub fn openCachedManifest(self: *Manifest) Conf.GetConfError!void {
-    self.mfest_file = self.conf.getConf(self.conf.mfest_cache, self.allocator) catch |err| switch (err) {
+    self.mfest_file = self.conf.getConf(self.conf.mfest_cache, self.allocator, self.io) catch |err| switch (err) {
         Conf.GetConfError.FileNotFound => null,
         else => {
             self.mfest_file = null;
@@ -183,7 +185,7 @@ pub fn openCachedManifest(self: *Manifest) Conf.GetConfError!void {
 }
 
 pub fn loadLocalPrefixOverrides(self: *Manifest) LoadLocalPrefixOverridesError!void {
-    const buf = try self.conf.getConf(self.conf.oride_prefixes, self.allocator);
+    const buf = try self.conf.getConf(self.conf.oride_prefixes, self.allocator, self.io);
     defer self.allocator.free(buf);
 
     var iter: Conf.KeyValueIterator = .init(buf);
@@ -195,11 +197,11 @@ pub fn loadLocalPrefixOverrides(self: *Manifest) LoadLocalPrefixOverridesError!v
 
         const pfix_id = std.fmt.parseInt(u32, kv.key, 16) catch {
             const pfix = if (kv.key[kv.key.len - 1] == '/') kv.key[0 .. kv.key.len - 1] else kv.key;
-            try self.unassigned_pfixes.append(.{ .key = try self.allocator.dupe(u8, pfix), .val = try self.allocator.dupe(u8, kv.value) });
+            try self.unassigned_pfixes.append(self.allocator, .{ .key = try self.allocator.dupe(u8, pfix), .val = try self.allocator.dupe(u8, kv.value) });
             continue;
         };
 
-        const res = try self.local_pfixes.getOrPut(pfix_id);
+        const res = try self.local_pfixes.getOrPut(self.allocator, pfix_id);
         if (res.found_existing) {
             log.warn("Duplicate prefix override id {d}. Overwriting value \"{s}\" with \"{s}\".", .{ res.key_ptr.*, res.value_ptr.*, kv.value });
             self.allocator.free(res.value_ptr.*);
@@ -215,9 +217,9 @@ test "format id to hex" {
 }
 
 pub fn storeLocalPrefixOverrides(self: Manifest) StoreLocalPrefixOverridesError!void {
-    const file = try self.conf.openOrCreateConfFile(self.conf.oride_prefixes, true, self.allocator);
+    const file = try self.conf.openOrCreateConfFile(self.conf.oride_prefixes, true, self.allocator, self.io);
     var w_buf: [512]u8 = undefined;
-    var writer = file.writer(&w_buf);
+    var writer = file.writer(self.io, &w_buf);
 
     writer.interface.print(local_prefix_disclaimer, .{Conf.proj_name}) catch return writer.err.?;
 
@@ -245,7 +247,7 @@ fn getOverridePrefixIterator(self: Manifest) LoadFromManifestFileError!OridePref
 fn loadOverridablePrefixes(self: *Manifest) (std.mem.Allocator.Error || LoadFromManifestFileError)!OridePrefixIterator {
     var iter = try self.getOverridePrefixIterator();
     while (iter.next()) |oride_pfix| {
-        try self.oride_pfixes.put(oride_pfix.id, oride_pfix.prefix);
+        try self.oride_pfixes.put(self.allocator, oride_pfix.id, oride_pfix.prefix);
     }
 
     return iter;
@@ -301,7 +303,7 @@ fn loadFileRecords(self: *Manifest, oride_pfix_iter: ?OridePrefixIterator) (Load
             break :blk .{ .key = file_record.path, .owned = false };
         };
 
-        const res = try self.file_record_map.file_records.getOrPut(local_fp);
+        const res = try self.file_record_map.file_records.getOrPut(self.allocator, local_fp);
         if (res.found_existing)
             log.warn("Duplicate file record \"{s}\". Overwriting existing file record.", .{file_record.path});
 
@@ -333,8 +335,8 @@ pub fn loadManifest(self: *Manifest) LoadManifestError!void {
             lowest_idx += 1;
         }
 
-        try self.oride_pfixes.putNoClobber(lowest_idx, pair.key);
-        const res = try self.local_pfixes.getOrPut(lowest_idx);
+        try self.oride_pfixes.putNoClobber(self.allocator, lowest_idx, pair.key);
+        const res = try self.local_pfixes.getOrPut(self.allocator, lowest_idx);
         if (res.found_existing)
             log.warn("Duplicate prefix override \"{s}\". Overwriting value \"{s}\" with \"{s}\".", .{ pair.key, res.value_ptr.*, pair.val });
 
@@ -355,17 +357,26 @@ pub fn storeManifest(self: *Manifest, writer: *std.Io.Writer) StoreManifestError
 
 test "manifest parsing" {
     const allocator = std.testing.allocator;
-    const conf: Conf = .{ .vol = "test_vol" };
-    var manifest: Manifest = .init(conf, allocator);
+    var arena_alloc: std.heap.ArenaAllocator = .init(allocator);
+    defer arena_alloc.deinit();
+    const arena = arena_alloc.allocator();
+
+    const io = std.testing.io;
+
+    var emap = try std.testing.environ.createMap(arena);
+    defer emap.deinit();
+
+    const conf: Conf = .{ .vol = "test_vol", .emap = &emap };
+    var manifest: Manifest = .init(conf, allocator, io);
     defer manifest.deinit();
 
     manifest.sync_tstamp = .{ .mod_dev_id = 5, .mod_time = 0 };
     manifest.mfest_file = &.{};
 
-    try manifest.oride_pfixes.put(2, "foo/bar");
-    try manifest.oride_pfixes.put(1, "override/me");
+    try manifest.oride_pfixes.put(allocator, 2, "foo/bar");
+    try manifest.oride_pfixes.put(allocator, 1, "override/me");
 
-    try manifest.local_pfixes.put(1, try allocator.dupe(u8, "owo/owo"));
+    try manifest.local_pfixes.put(allocator, 1, try allocator.dupe(u8, "owo/owo"));
 
     const rec1: FileRecordMap.FileRecord = .{
         .blk_idx = 69,

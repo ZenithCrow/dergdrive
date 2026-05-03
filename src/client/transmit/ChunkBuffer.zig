@@ -1,45 +1,42 @@
 const std = @import("std");
-const Thread = std.Thread;
 
 const ChunkBuffer = @This();
 
-pub const EmptyState = enum(u1) {
+pub const FillState = enum(u1) {
     empty = 0,
     full = 1,
 };
 
 pub const chunk_size = 0x400000; // 4 MiB
 
-back_buf: [chunk_size]u8 = undefined,
-buf_len: usize,
+buf: []u8,
 data_len: usize = 0,
-empty: EmptyState = .empty,
-w_lock: Thread.Mutex = .{},
-state_cond: Thread.Condition = .{},
-
-pub inline fn getBuf(self: *ChunkBuffer) []u8 {
-    return self.back_buf[0..self.buf_len];
-}
+empty: FillState = .empty,
+w_lock: std.Io.Mutex = .init,
+state_cond: std.Io.Condition = .init,
 
 pub inline fn getWrittenBuf(self: *ChunkBuffer) []const u8 {
-    return self.back_buf[0..self.data_len];
+    return self.buf[0..self.data_len];
 }
 
-pub fn waitUntilState(self: *ChunkBuffer, empty: EmptyState) void {
-    self.w_lock.lock();
-    defer self.w_lock.unlock();
+pub fn waitUntilState(self: *ChunkBuffer, empty: FillState, io: std.Io) std.Io.Cancelable!void {
+    try self.w_lock.lock(io);
+    defer self.w_lock.unlock(io);
 
     while (self.empty != empty)
-        self.state_cond.wait(&self.w_lock);
+        try self.state_cond.wait(io, &self.w_lock);
 }
 
-pub fn signalState(self: *ChunkBuffer, empty: EmptyState) void {
-    self.w_lock.lock();
-    defer self.w_lock.unlock();
+pub fn signalState(self: *ChunkBuffer, empty: FillState, io: std.Io) void {
+    const old_cancel_protection = io.swapCancelProtection(.blocked);
+    defer _ = io.swapCancelProtection(old_cancel_protection);
+
+    self.w_lock.lock(io) catch unreachable;
+    defer self.w_lock.unlock(io);
 
     self.empty = empty;
     if (empty == .full)
         self.data_len = 0;
 
-    self.state_cond.signal();
+    self.state_cond.signal(io);
 }

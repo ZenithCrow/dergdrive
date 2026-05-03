@@ -8,5 +8,17 @@ const RequestStorage = @import("RequestStorage.zig");
 
 const RawFileChunkBuffer = @This();
 
-chunk_buf: ChunkBuffer = .{ .buf_len = ChunkBuffer.chunk_size - (Cryptor.enc_add_info_len + sync.templates.TransmitFileMsg.non_payload_size) },
+pub const buf_size = ChunkBuffer.chunk_size - (Cryptor.enc_add_info_len + sync.templates.TransmitFileMsg.non_payload_size);
+
+chunk_buf: ChunkBuffer,
 req_id: ?sync.RequestChunk.IdT = null,
+
+pub fn init(allocator: std.mem.Allocator) std.mem.Allocator.Error!RawFileChunkBuffer {
+    return .{
+        .chunk_buf = .{ .buf = try allocator.alloc(u8, buf_size) },
+    };
+}
+
+pub fn deinit(self: RawFileChunkBuffer, allocator: std.mem.Allocator) void {
+    allocator.free(self.chunk_buf.buf);
+}

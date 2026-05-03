@@ -30,16 +30,23 @@ pub const Request = struct {
     n_sent: usize = 0,
     req: RequestParams,
     resp: ?Response = null,
+    finished: bool = false,
 };
 
 id_supply: RequestChunk.IdSupplier = .{},
-pending_reqs: std.AutoArrayHashMap(RequestChunk.IdT, Request),
-finished_reqs: std.AutoArrayHashMap(RequestChunk.IdT, Request),
+reqs: std.array_hash_map.Auto(RequestChunk.IdT, Request),
+reqs_lock: std.Io.Mutex = .init,
 
-pub fn newPushFileNew(self: *RequestStorage) std.mem.Allocator.Error!RequestChunk.IdT {
-    const req_id = self.id_supply.takeId();
+pub fn newPushFileNew(self: *RequestStorage, allocator: std.mem.Allocator, io: std.Io) std.mem.Allocator.Error!RequestChunk.IdT {
+    const old_cancel_protection = io.swapCancelProtection(.blocked);
+    defer _ = io.swapCancelProtection(old_cancel_protection);
 
-    try self.pending_reqs.putNoClobber(req_id, .{
+    const req_id = self.id_supply.takeId(io);
+
+    self.reqs_lock.lock(io) catch unreachable;
+    defer self.reqs_lock.unlock(io);
+
+    try self.reqs.putNoClobber(allocator, req_id, .{
         .id = req_id,
         .req_type = .file_new,
         .req = undefined,

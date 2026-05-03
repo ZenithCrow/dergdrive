@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const crypt = @import("crypt/crypt.zig");
 
@@ -54,6 +55,19 @@ pub const util = struct {
     pub const sort = @import("util/sort.zig");
 };
 
+pub fn refAllDeclsRecursive(comptime T: type) void {
+    if (!builtin.is_test) return;
+    inline for (comptime std.meta.declarations(T)) |decl| {
+        if (@TypeOf(@field(T, decl.name)) == type) {
+            switch (@typeInfo(@field(T, decl.name))) {
+                .@"struct", .@"enum", .@"union", .@"opaque" => refAllDeclsRecursive(@field(T, decl.name)),
+                else => {},
+            }
+        }
+        _ = &@field(T, decl.name);
+    }
+}
+
 test {
-    std.testing.refAllDeclsRecursive(@This());
+    refAllDeclsRecursive(@This());
 }

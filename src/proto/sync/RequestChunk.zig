@@ -1,5 +1,5 @@
 const std = @import("std");
-const Mutex = std.Thread.Mutex;
+const Mutex = std.Io.Mutex;
 
 const Chunk = @import("Chunk.zig");
 const SyncMessage = @import("SyncMessage.zig");
@@ -14,12 +14,15 @@ pub const resp_code_size = @sizeOf(RespCodeTagT);
 pub const content_size = id_size + request_type_size + resp_code_size;
 
 pub const IdSupplier = struct {
-    id_rw_lock: Mutex = .{},
+    id_rw_lock: Mutex = .init,
     next_id: IdT = 0,
 
-    pub fn takeId(self: *IdSupplier) IdT {
-        self.id_rw_lock.lock();
-        defer self.id_rw_lock.unlock();
+    pub fn takeId(self: *IdSupplier, io: std.Io) IdT {
+        const old_cancel_protection = io.swapCancelProtection(.blocked);
+        defer _ = io.swapCancelProtection(old_cancel_protection);
+
+        self.id_rw_lock.lock(io) catch unreachable;
+        defer self.id_rw_lock.unlock(io);
 
         const id = self.next_id;
         self.next_id += 1;

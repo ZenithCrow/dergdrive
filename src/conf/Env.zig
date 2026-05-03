@@ -4,7 +4,7 @@ const Conf = @import("Conf.zig");
 
 const Env = @This();
 
-pub const StoreEnvsError = std.mem.Allocator.Error || Conf.OpenOrCreateConfFileError || std.Io.File.WriteError;
+pub const StoreEnvsError = std.mem.Allocator.Error || Conf.OpenOrCreateConfFileError || std.Io.File.Writer.Error;
 
 const log = std.log.scoped(.@"conf/Env");
 
@@ -47,6 +47,7 @@ const ConfFileContext = struct {
 
 env_registry: std.array_hash_map.String(EnvValue),
 modified_envs: std.array_hash_map.Custom(Conf.ConfFile, void, ConfFileContext, true),
+modified_envs_ctx: ConfFileContext,
 allocator: std.mem.Allocator,
 io: std.Io,
 conf: Conf,
@@ -55,6 +56,7 @@ pub fn init(conf: Conf, allocator: std.mem.Allocator, io: std.Io) Env {
     return .{
         .conf = conf,
         .env_registry = .empty,
+        .modified_envs_ctx = .{ .allocator = allocator, .conf = conf },
         .modified_envs = .empty,
         .allocator = allocator,
         .io = io,
@@ -105,17 +107,19 @@ pub fn storeEnvs(self: Env) StoreEnvsError!void {
 
     for (self.modified_envs.keys(), 0..) |env, i| {
         const buf_part = write_buf_size / env_count;
-        env_writers[i] = (try self.conf.openOrCreateConfFile(env, true, self.allocator)).writer(write_buf[buf_part * i .. buf_part * i + buf_part]);
+        env_writers[i] = (try self.conf.openOrCreateConfFile(env, true, self.allocator, self.io)).writer(self.io, write_buf[buf_part * i .. buf_part * i + buf_part]);
     }
     defer {
         for (env_writers) |w| {
-            w.file.close();
+            w.file.close(self.io);
         }
     }
 
     var iter = self.env_registry.iterator();
     while (iter.next()) |kv| {
-        const w: *std.Io.File.Writer = &env_writers[self.modified_envs.getIndex(kv.value_ptr.conf_file) orelse continue];
+        const w: *std.Io.File.Writer = &env_writers[
+            self.modified_envs.getIndexContext(kv.value_ptr.conf_file, self.modified_envs_ctx) orelse continue
+        ];
         w.interface.print("{s}={s}\n", .{ kv.key_ptr.*, kv.value_ptr.val }) catch return w.err.?;
     }
 
@@ -150,7 +154,7 @@ pub fn getWithCwd(self: Env, key: []const u8, iterate: bool, io: std.Io) GetWith
 }
 
 pub fn set(self: *Env, key: []const u8, val: []const u8, conf_file: ?Conf.ConfFile) std.mem.Allocator.Error!void {
-    const res = try self.env_registry.getOrPut(key);
+    const res = try self.env_registry.getOrPut(self.allocator, key);
     if (res.found_existing) {
         if (!std.mem.eql(u8, val, res.value_ptr.val)) {
             res.value_ptr.runtime_modified = true;
@@ -173,12 +177,21 @@ pub fn set(self: *Env, key: []const u8, val: []const u8, conf_file: ?Conf.ConfFi
     }
 
     if (res.value_ptr.runtime_modified)
-        try self.modified_envs.put(conf_file orelse self.conf.conf_file_default, {});
+        try self.modified_envs.putContext(self.allocator, conf_file orelse self.conf.conf_file_default, {}, self.modified_envs_ctx);
 }
 
 test "env config" {
     const allocator = std.testing.allocator;
-    var conf: Conf = .{ .vol = "vol1" };
+    var arena_alloc: std.heap.ArenaAllocator = .init(allocator);
+    defer arena_alloc.deinit();
+    const arena = arena_alloc.allocator();
+
+    const io = std.testing.io;
+
+    var emap = try std.testing.environ.createMap(arena);
+    defer emap.deinit();
+
+    var conf: Conf = .{ .vol = "vol1", .emap = &emap };
     var hierarchy = try allocator.dupe(Conf.ConfFile, conf.conf_file_hierarchy);
     defer allocator.free(hierarchy);
 
@@ -201,7 +214,7 @@ test "env config" {
     const weird_value: []const u8 = "hm = mmm - -ad -== 000";
 
     {
-        var env: Env = .init(conf, allocator);
+        var env: Env = .init(conf, allocator, io);
         defer env.deinit();
 
         try env.set("foo", "bar", null);
@@ -230,7 +243,7 @@ test "env config" {
     conf.conf_file_hierarchy = hierarchy;
 
     {
-        var env: Env = .init(conf, allocator);
+        var env: Env = .init(conf, allocator, io);
         defer env.deinit();
 
         try env.loadEnvs();

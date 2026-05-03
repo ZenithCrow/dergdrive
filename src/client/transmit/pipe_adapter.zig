@@ -18,57 +18,63 @@ pub fn PipeAdapter(comptime raw_side: bool) type {
 
         cryptors: []Cryptor,
         avail_idx: u8 = 0,
-        idx_lock: Thread.Mutex = .{},
-        avail_cond: Thread.Condition = .{},
+        idx_lock: std.Io.Mutex = .init,
+        avail_cond: std.Io.Condition = .init,
 
-        pub fn waitUntilAvailable(self: *@This()) u8 {
-            self.idx_lock.lock();
-            defer self.idx_lock.unlock();
+        pub fn waitUntilAvailable(self: *@This(), io: std.Io) std.Io.Cancelable!u8 {
+            try self.idx_lock.lock(io);
+            defer self.idx_lock.unlock(io);
 
             while (self.avail_idx == invalid_index)
-                self.avail_cond.wait(&self.idx_lock);
+                try self.avail_cond.wait(io, &self.idx_lock);
 
             const idx = self.avail_idx;
             self.avail_idx = invalid_index;
             return idx;
         }
 
-        pub fn signalIndexAvailable(self: *@This(), idx: u8) void {
-            self.idx_lock.lock();
-            defer self.idx_lock.unlock();
+        pub fn signalIndexAvailable(self: *@This(), idx: u8, io: std.Io) void {
+            const old_cancel_protection = io.swapCancelProtection(.blocked);
+            defer _ = io.swapCancelProtection(old_cancel_protection);
+
+            self.idx_lock.lock(io) catch unreachable;
+            defer self.idx_lock.unlock(io);
 
             self.avail_idx = idx;
-            self.avail_cond.signal();
+            self.avail_cond.signal(io);
         }
 
-        pub fn signalCryptorAvailable(self: *@This(), cryptor: *Cryptor) void {
-            self.idx_lock.lock();
-            defer self.idx_lock.unlock();
+        pub fn signalCryptorAvailable(self: *@This(), cryptor: *Cryptor, io: std.Io) void {
+            const old_cancel_protection = io.swapCancelProtection(.blocked);
+            defer _ = io.swapCancelProtection(old_cancel_protection);
+
+            self.idx_lock.lock(io) catch unreachable;
+            defer self.idx_lock.unlock(io);
 
             for (self.cryptors, 0..) |*c, i| {
                 if (c == cryptor) {
                     self.avail_idx = @as(u8, @truncate(i));
-                    self.avail_cond.signal();
+                    self.avail_cond.signal(io);
                     return;
                 }
             }
         }
 
-        pub fn claimChunkBuf(self: *@This(), op: Operation) *ChunkBufT {
+        pub fn claimChunkBuf(self: *@This(), op: Operation, io: std.Io) std.Io.Cancelable!*ChunkBufT {
             {
-                self.idx_lock.lock();
-                defer self.idx_lock.unlock();
+                try self.idx_lock.lock(io);
+                defer self.idx_lock.unlock(io);
 
                 self.avail_idx = invalid_index;
             }
 
             for (0..self.cryptors.len + 1) |i| {
-                const idx = if (i == self.cryptors.len) self.waitUntilAvailable() else i;
+                const idx = if (i == self.cryptors.len) try self.waitUntilAvailable(io) else i;
                 const cryptor = &self.cryptors[idx];
                 const cbuf: *ChunkBufT = if (raw_side) &cryptor.raw_file_cbuf else &cryptor.request_cbuf;
 
-                cbuf.chunk_buf.w_lock.lock();
-                defer cbuf.chunk_buf.w_lock.unlock();
+                try cbuf.chunk_buf.w_lock.lock(io);
+                defer cbuf.chunk_buf.w_lock.unlock(io);
 
                 if ((@intFromEnum(op) ^ @intFromEnum(cbuf.chunk_buf.empty)) == 0)
                     return cbuf;
@@ -77,12 +83,12 @@ pub fn PipeAdapter(comptime raw_side: bool) type {
             unreachable;
         }
 
-        pub fn unclaimChunkBuf(self: *@This(), used_buf: *ChunkBufT, perf_op: Operation) void {
+        pub fn unclaimChunkBuf(self: *@This(), used_buf: *ChunkBufT, perf_op: Operation, io: std.Io) void {
             for (self.cryptors) |*cryptor| {
                 const cbuf: *ChunkBufT = if (raw_side) &cryptor.raw_file_cbuf else &cryptor.request_cbuf;
 
                 if (cbuf == used_buf)
-                    cbuf.chunk_buf.signalState(if (perf_op == .write) .full else .empty);
+                    cbuf.chunk_buf.signalState(if (perf_op == .write) .full else .empty, io);
             }
         }
     };
