@@ -64,7 +64,7 @@ test "non-payload size matches" {
     var buf: [TransmitFileMsg.non_payload_size + 1024]u8 = undefined;
 
     const tfm: TransmitFileMsg = try .init(&buf);
-    try std.testing.expectEqual(non_payload_size, try tfm.msg_container.getWrittenSize());
+    try std.testing.expectEqual(non_payload_size, try tfm.msg_container.getMsgSize());
 }
 
 test "newMsg payload size matches" {
@@ -74,5 +74,5 @@ test "newMsg payload size matches" {
     var tfm: TransmitFileMsg = try .init(&buf);
     const pld_buf = try tfm.newMsg(payload_size, .file_post, 0);
     try std.testing.expectEqual(payload_size, pld_buf.len);
-    try std.testing.expectEqual(payload_size + TransmitFileMsg.non_payload_size, try tfm.msg_container.getWrittenSize());
+    try std.testing.expectEqual(payload_size + TransmitFileMsg.non_payload_size, try tfm.msg_container.getMsgSize());
 }

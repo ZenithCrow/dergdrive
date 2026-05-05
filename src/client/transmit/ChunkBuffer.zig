@@ -11,32 +11,42 @@ pub const chunk_size = 0x400000; // 4 MiB
 
 buf: []u8,
 data_len: usize = 0,
-empty: FillState = .empty,
+fill_state: FillState = .empty,
 w_lock: std.Io.Mutex = .init,
 state_cond: std.Io.Condition = .init,
 
-pub inline fn getWrittenBuf(self: *ChunkBuffer) []const u8 {
+pub fn getWrittenBufProtected(self: *ChunkBuffer, io: std.Io) std.Io.Cancelable![]const u8 {
+    try self.w_lock.lock(io);
+    defer self.w_lock.unlock(io);
+
     return self.buf[0..self.data_len];
+}
+
+pub fn setBufEmptyProtected(self: *ChunkBuffer, io: std.Io) std.Io.Cancelable!void {
+    self.w_lock.lock(io) catch unreachable;
+    defer self.w_lock.unlock(io);
+
+    self.setState(.empty);
 }
 
 pub fn waitUntilState(self: *ChunkBuffer, empty: FillState, io: std.Io) std.Io.Cancelable!void {
     try self.w_lock.lock(io);
     defer self.w_lock.unlock(io);
 
-    while (self.empty != empty)
+    while (self.fill_state != empty)
         try self.state_cond.wait(io, &self.w_lock);
 }
 
-pub fn signalState(self: *ChunkBuffer, empty: FillState, io: std.Io) void {
-    const old_cancel_protection = io.swapCancelProtection(.blocked);
-    defer _ = io.swapCancelProtection(old_cancel_protection);
+pub fn setState(self: *ChunkBuffer, fill_state: FillState) void {
+    self.fill_state = fill_state;
+    if (fill_state == .empty)
+        self.data_len = 0;
+}
 
-    self.w_lock.lock(io) catch unreachable;
+pub fn setStateAndSignal(self: *ChunkBuffer, fill_state: FillState, io: std.Io) std.Io.Cancelable!void {
+    try self.w_lock.lock(io);
     defer self.w_lock.unlock(io);
 
-    self.empty = empty;
-    if (empty == .full)
-        self.data_len = 0;
-
+    self.setState(fill_state);
     self.state_cond.signal(io);
 }

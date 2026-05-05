@@ -7,6 +7,7 @@ const Command = @import("Command.zig");
 const help_cmd = @import("commands/help.zig");
 const @"ls-include_cmd" = @import("commands/ls-include.zig");
 const @"test-sync_cmd" = @import("commands/test-sync.zig");
+const @"test-pipe_cmd" = @import("commands/test-pipe.zig");
 const Option = @import("Option.zig");
 const help_opt = @import("options/help.zig");
 const @"include-rules_opt" = @import("options/include-rules.zig");
@@ -24,7 +25,10 @@ pub const ExecError = error{
 const commands: []const Command = &(.{
     help_cmd.command,
     @"ls-include_cmd".command,
-} ++ if (builtin.mode == .Debug) .{@"test-sync_cmd".command} else .{});
+} ++ if (builtin.mode == .Debug) .{
+    @"test-sync_cmd".command,
+    @"test-pipe_cmd".command,
+} else .{});
 const CommandTup = struct { []const u8, Command };
 const command_tups: [commands.len]CommandTup = blk: {
     var tups: [commands.len]CommandTup = undefined;

@@ -32,11 +32,12 @@ pub fn dataSize(self: SyncMessage) Chunk.ReadError!header.DataLenT {
 }
 
 /// the total size of the message including header and data
-pub inline fn getWrittenSize(self: SyncMessage) Chunk.ReadError!header.DataLenT {
+pub inline fn getMsgSize(self: SyncMessage) Chunk.ReadError!header.DataLenT {
     return header.header_size + try self.dataSize();
 }
 
-pub inline fn readWrittenSize(self: SyncMessage) header.DataLenT {
+/// read the size of the data from the message header
+pub inline fn readDataSize(self: SyncMessage) header.DataLenT {
     return std.mem.readInt(header.DataLenT, self.msg_buf[header.header_title_size..header.header_size], .little);
 }
 

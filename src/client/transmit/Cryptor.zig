@@ -14,7 +14,7 @@ const AtomicBool = std.atomic.Value(bool);
 
 const log = std.log.scoped(.@"client/transmit/Cryptor");
 
-pub const CryptorCluster = struct {
+pub const Cluster = struct {
     pub const CryptDir = enum {
         encrypt,
         decrypt,
@@ -31,7 +31,7 @@ pub const CryptorCluster = struct {
     cryptors: []Cryptor = &.{},
     group: std.Io.Group = .init,
 
-    pub fn init(key: [crypt.key_length]u8, req_stor: *RequestStorage, num_cryptors: u8) CryptorCluster {
+    pub fn init(key: [crypt.key_length]u8, req_stor: *RequestStorage, num_cryptors: u8) Cluster {
         return .{
             .key = key,
             .request_storage = req_stor,
@@ -39,7 +39,7 @@ pub const CryptorCluster = struct {
         };
     }
 
-    pub fn initCryptors(self: *CryptorCluster, allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
+    pub fn initCryptors(self: *Cluster, allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
         self.cryptors = self.cryptors_arr[0..self.num_cryptors];
 
         for (self.cryptors, 0..) |*cryptor, i| {
@@ -50,6 +50,16 @@ pub const CryptorCluster = struct {
                 log.warn("The current number of cryptors is: {d}.", .{self.num_cryptors});
                 break;
             };
+
+            cryptor.request_cbuf.initTransmitFileMsg() catch unreachable;
+        }
+
+        log.debug("{d} cryptors runnning.", .{self.num_cryptors});
+    }
+
+    pub fn deinitCryptors(self: Cluster, allocator: std.mem.Allocator) void {
+        for (self.cryptors) |c| {
+            c.deinit(allocator);
         }
     }
 
@@ -63,8 +73,8 @@ pub const CryptorCluster = struct {
     pub fn runCryptors(self: *@This(), comptime dir: CryptDir, io: std.Io) std.Io.ConcurrentError!void {
         std.debug.assert(self.raw_file_pa != null and self.request_pa != null);
 
-        for (&self.cryptors) |*cryptor| {
-            try io.concurrent(comptime switch (dir) {
+        for (self.cryptors) |*cryptor| {
+            try self.group.concurrent(io, comptime switch (dir) {
                 .encrypt => pipeEncrypted,
                 .decrypt => pipeDecrypted,
             }, .{
@@ -83,9 +93,9 @@ const Cryptor = @This();
 
 raw_file_cbuf: RawFileChunkBuffer,
 request_cbuf: RequestChunkBuffer,
-cluster: *CryptorCluster,
+cluster: *Cluster,
 
-pub fn init(crypt_cluster: *CryptorCluster, allocator: std.mem.Allocator) std.mem.Allocator.Error!Cryptor {
+pub fn init(crypt_cluster: *Cluster, allocator: std.mem.Allocator) std.mem.Allocator.Error!Cryptor {
     const raw_file_cbuf: RawFileChunkBuffer = try .init(allocator);
     errdefer raw_file_cbuf.deinit(allocator);
 
@@ -99,10 +109,27 @@ pub fn init(crypt_cluster: *CryptorCluster, allocator: std.mem.Allocator) std.me
     };
 }
 
+pub fn deinit(self: Cryptor, allocator: std.mem.Allocator) void {
+    self.raw_file_cbuf.deinit(allocator);
+    self.request_cbuf.deinit(allocator);
+}
+
 pub fn pipeEncrypted(self: *Cryptor, io: std.Io) std.Io.Cancelable!void {
     while (true) {
         try self.raw_file_cbuf.chunk_buf.waitUntilState(.full, io);
         try self.request_cbuf.chunk_buf.waitUntilState(.empty, io);
+
+        defer {
+            self.cluster.raw_file_pa.?.signalCryptorFinished(self, io);
+            self.cluster.request_pa.?.signalCryptorFinished(self, io);
+        }
+
+        const cryptor_idx = for (self.cluster.cryptors, 0..) |*c, i| {
+            if (c == self)
+                break i;
+        } else unreachable;
+
+        log.debug("Cryptor {d} has picked up a job.", .{cryptor_idx});
 
         const old_cancel_protection = io.swapCancelProtection(.blocked);
         defer _ = io.swapCancelProtection(old_cancel_protection);
@@ -114,7 +141,11 @@ pub fn pipeEncrypted(self: *Cryptor, io: std.Io) std.Io.Cancelable!void {
             break :lock_blk self.cluster.request_storage.reqs.get(self.raw_file_cbuf.req_id.?).?;
         };
 
-        const in_buf = self.raw_file_cbuf.chunk_buf.getWrittenBuf();
+        const in_buf = self.raw_file_cbuf.chunk_buf.getWrittenBufProtected(io) catch unreachable;
+        defer self.raw_file_cbuf.chunk_buf.setBufEmptyProtected(io) catch unreachable;
+
+        const out_final_size = sync.templates.TransmitFileMsg.non_payload_size + crypt.nonce_auth_len + in_buf.len;
+
         const out_buf_all = self.request_cbuf.trns_msg.newMsg(
             @as(u32, @intCast(in_buf.len)) + crypt.nonce_auth_len,
             req.req_type,
@@ -141,8 +172,15 @@ pub fn pipeEncrypted(self: *Cryptor, io: std.Io) std.Io.Cancelable!void {
 
         self.raw_file_cbuf.req_id = null;
 
-        self.cluster.raw_file_pa.?.signalCryptorAvailable(self, io);
-        self.cluster.request_pa.?.signalCryptorAvailable(self, io);
+        {
+            self.request_cbuf.chunk_buf.w_lock.lock(io) catch unreachable;
+            defer self.request_cbuf.chunk_buf.w_lock.unlock(io);
+
+            self.request_cbuf.chunk_buf.data_len = out_final_size;
+            self.request_cbuf.chunk_buf.setState(.full);
+        }
+
+        log.debug("Cryptor {d} has finished its job", .{cryptor_idx});
     }
 }
 

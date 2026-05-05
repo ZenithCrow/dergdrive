@@ -7,22 +7,29 @@ const sync = @import("dergdrive").proto.sync;
 const Cryptor = @import("Cryptor.zig");
 const pipe_adapter = @import("pipe_adapter.zig");
 const RequestChunkBuffer = @import("RequestChunkBuffer.zig");
+const RequestStorage = @import("RequestStorage.zig");
 
-const AtomicBool = std.atomic.Value(bool);
+const log = std.log.scoped(.@"client/transmit/RequestSender");
+
 const RequestSender = @This();
 
 //tcp_cli: *TcpClient,
-id_supply: *sync.RequestChunk.IdSupplier,
+req_stor: *RequestStorage,
 enc_file_reqs: *pipe_adapter.RequestPipeAdapter,
 prio_request: RequestChunkBuffer,
 send_task: ?std.Io.Future(std.Io.Cancelable!void) = null,
 
-pub fn init(id_supply: *sync.RequestChunk.IdSupplier, enc_file_reqs: *pipe_adapter.RequestPipeAdapter, allocator: std.mem.Allocator) std.mem.Allocator.Error!RequestSender {
+pub fn init(req_stor: *RequestStorage, enc_file_reqs: *pipe_adapter.RequestPipeAdapter, allocator: std.mem.Allocator) std.mem.Allocator.Error!RequestSender {
     return .{
-        .id_supply = id_supply,
+        .req_stor = req_stor,
         .enc_file_reqs = enc_file_reqs,
         .prio_request = try .init(allocator),
     };
+}
+
+pub fn deinit(self: *RequestSender, allocator: std.mem.Allocator) void {
+    self.prio_request.deinit(allocator);
+    self.send_task = null;
 }
 
 pub fn start(self: *RequestSender, io: std.Io) std.Io.ConcurrentError!void {
@@ -86,29 +93,51 @@ fn readBuf(self: *RequestSender, io: std.Io) std.Io.Cancelable![]u8 {
         try req_buf_res.chunk_buf.w_lock.lock(io);
         defer req_buf_res.chunk_buf.w_lock.unlock(io);
 
-        if (req_buf_res.chunk_buf.empty == .full)
+        if (req_buf_res.chunk_buf.fill_state == .full)
             return req_buf_res.chunk_buf.buf[0..req_buf_res.chunk_buf.data_len];
     }
+
+    log.debug("idx: {d}", .{self.enc_file_reqs.avail_idx});
 
     unreachable;
 }
 
 fn finishReadBuf(self: *RequestSender, used_buf: []u8, io: std.Io) void {
+    const old_cancel_protection = io.swapCancelProtection(.blocked);
+    defer _ = io.swapCancelProtection(old_cancel_protection);
+
     for (self.enc_file_reqs.cryptors) |*cryptor| {
         if (used_buf.ptr == cryptor.request_cbuf.chunk_buf.buf.ptr) {
-            cryptor.request_cbuf.chunk_buf.signalState(.empty, io);
+            cryptor.request_cbuf.chunk_buf.setStateAndSignal(.empty, io) catch unreachable;
             return;
         }
     }
 
     if (used_buf.ptr == self.prio_request.chunk_buf.buf.ptr)
-        self.prio_request.chunk_buf.signalState(.empty, io);
+        self.prio_request.chunk_buf.setStateAndSignal(.empty, io) catch unreachable;
 }
 
 fn sendLoop(self: *RequestSender, io: std.Io) std.Io.Cancelable!void {
     while (true) {
+        defer {
+            {
+                const old_cancel_protection = io.swapCancelProtection(.blocked);
+                defer _ = io.swapCancelProtection(old_cancel_protection);
+
+                self.req_stor.reqs_complete_lock.lock(io) catch unreachable;
+                defer self.req_stor.reqs_complete_lock.unlock(io);
+
+                self.req_stor.reqs_complete += 1;
+            }
+
+            self.req_stor.reqs_complete_cond.signal(io);
+        }
+
         const req_buf = try self.readBuf(io);
         defer self.finishReadBuf(req_buf, io);
+
+        log.debug("sending {d} bytes", .{req_buf.len});
+        log.info("sent file", .{});
 
         // self.tcp_cli.sendAll(req_buf) catch {
         //     //  TODO: handle error

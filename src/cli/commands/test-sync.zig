@@ -6,6 +6,7 @@ const IncludeTree = dergdrive.client.track.IncludeTree;
 const FileRecordMap = dergdrive.client.track.FileRecordMap;
 const FileReader = dergdrive.client.transmit.FileReader;
 const SyncOp = dergdrive.client.track.SyncOp;
+const unit_sync = dergdrive.client.track.unit_sync;
 
 const include_rules_opt = @import("../options/include-rules.zig");
 const root_dir_opt = @import("../options/root-dir.zig");
@@ -20,8 +21,7 @@ pub const command: cli.Command = .{
     .exec_fn = struct {
         pub fn execFn(args: []const []const u8, emap: *std.process.Environ.Map, allocator: std.mem.Allocator, io: std.Io) cli.Command.ExecError!void {
             return testSync(args, emap, allocator, io) catch |err| switch (err) {
-                cli.Command.ExecError.InvalidSyntax => @errorCast(err),
-                cli.Command.ExecError.ReturnStatusFailure => @errorCast(err),
+                cli.Command.ExecError.InvalidSyntax, cli.Command.ExecError.ReturnStatusFailure => |e| @errorCast(e),
                 else => blk: {
                     log.err("Command failed due to error: {t}.", .{err});
                     break :blk cli.Command.ExecError.ReturnStatusFailure;
@@ -84,9 +84,13 @@ fn testSync(args: []const []const u8, emap: *std.process.Environ.Map, allocator:
         .push = .{ .deleted = false, .force = false, .new = true, .synced = true },
     };
 
-    const frmap_dir_iter: FileRecordMap.DirIterator = .{ .dir_range = .{ 0, file_record_map.file_records.count() }, .parent_path = "", .sorted_map = &file_record_map };
+    const sync_ctx: unit_sync.SyncUnitCtx = .{
+        .allocator = allocator,
+        .f_reader = &file_reader,
+        .io = io,
+    };
 
-    try file_reader.syncDirApplyRules("", param_vals.root_dir_iterable, sync_op, frmap_dir_iter, tree, 1, allocator, io);
+    try unit_sync.syncRootDirApplyRules(&sync_ctx, param_vals.root_dir_iterable, sync_op, file_record_map, tree);
 }
 
 const file_record_keys = [_][]const u8{

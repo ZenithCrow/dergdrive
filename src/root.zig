@@ -18,6 +18,7 @@ pub const client = struct {
         pub const FileRecordMap = @import("client/track/FileRecordMap.zig");
         pub const Manifest = @import("client/track/Manifest.zig");
         pub const SyncOp = @import("client/track/SyncOp.zig");
+        pub const unit_sync = @import("client/track/unit_sync.zig");
     };
 
     pub const transmit = struct {
@@ -55,6 +56,7 @@ pub const util = struct {
     pub const sort = @import("util/sort.zig");
 };
 
+// pulled from zig 0.15 implementation
 pub fn refAllDeclsRecursive(comptime T: type) void {
     if (!builtin.is_test) return;
     inline for (comptime std.meta.declarations(T)) |decl| {

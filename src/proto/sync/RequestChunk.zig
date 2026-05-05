@@ -14,8 +14,13 @@ pub const resp_code_size = @sizeOf(RespCodeTagT);
 pub const content_size = id_size + request_type_size + resp_code_size;
 
 pub const IdSupplier = struct {
-    id_rw_lock: Mutex = .init,
-    next_id: IdT = 0,
+    id_rw_lock: Mutex,
+    next_id: IdT,
+
+    pub const init: @This() = .{
+        .id_rw_lock = .init,
+        .next_id = 0,
+    };
 
     pub fn takeId(self: *IdSupplier, io: std.Io) IdT {
         const old_cancel_protection = io.swapCancelProtection(.blocked);

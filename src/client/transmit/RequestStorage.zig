@@ -33,9 +33,24 @@ pub const Request = struct {
     finished: bool = false,
 };
 
-id_supply: RequestChunk.IdSupplier = .{},
+id_supply: RequestChunk.IdSupplier,
 reqs: std.array_hash_map.Auto(RequestChunk.IdT, Request),
-reqs_lock: std.Io.Mutex = .init,
+reqs_lock: std.Io.Mutex,
+
+reqs_piped: usize = 0,
+reqs_complete: usize = 0,
+reqs_complete_lock: std.Io.Mutex = .init,
+reqs_complete_cond: std.Io.Condition = .init,
+
+pub const init: @This() = .{
+    .id_supply = .init,
+    .reqs = .empty,
+    .reqs_lock = .init,
+};
+
+pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+    self.reqs.deinit(allocator);
+}
 
 pub fn newPushFileNew(self: *RequestStorage, allocator: std.mem.Allocator, io: std.Io) std.mem.Allocator.Error!RequestChunk.IdT {
     const old_cancel_protection = io.swapCancelProtection(.blocked);
@@ -49,7 +64,7 @@ pub fn newPushFileNew(self: *RequestStorage, allocator: std.mem.Allocator, io: s
     try self.reqs.putNoClobber(allocator, req_id, .{
         .id = req_id,
         .req_type = .file_new,
-        .req = undefined,
+        .req = .{ .file_new = undefined },
     });
 
     return req_id;

@@ -17,9 +17,16 @@ pub fn PipeAdapter(comptime raw_side: bool) type {
         const ChunkBufT = if (raw_side) RawFileChunkBuffer else RequestChunkBuffer;
 
         cryptors: []Cryptor,
-        avail_idx: u8 = 0,
-        idx_lock: std.Io.Mutex = .init,
-        avail_cond: std.Io.Condition = .init,
+        avail_idx: u8,
+        idx_lock: std.Io.Mutex,
+        avail_cond: std.Io.Condition,
+
+        pub const init: @This() = .{
+            .cryptors = &.{},
+            .avail_idx = 0,
+            .idx_lock = .init,
+            .avail_cond = .init,
+        };
 
         pub fn waitUntilAvailable(self: *@This(), io: std.Io) std.Io.Cancelable!u8 {
             try self.idx_lock.lock(io);
@@ -33,7 +40,7 @@ pub fn PipeAdapter(comptime raw_side: bool) type {
             return idx;
         }
 
-        pub fn signalIndexAvailable(self: *@This(), idx: u8, io: std.Io) void {
+        pub fn signalIndexFinished(self: *@This(), idx: u8, io: std.Io) void {
             const old_cancel_protection = io.swapCancelProtection(.blocked);
             defer _ = io.swapCancelProtection(old_cancel_protection);
 
@@ -44,20 +51,16 @@ pub fn PipeAdapter(comptime raw_side: bool) type {
             self.avail_cond.signal(io);
         }
 
-        pub fn signalCryptorAvailable(self: *@This(), cryptor: *Cryptor, io: std.Io) void {
+        pub fn signalCryptorFinished(self: *@This(), cryptor: *Cryptor, io: std.Io) void {
             const old_cancel_protection = io.swapCancelProtection(.blocked);
             defer _ = io.swapCancelProtection(old_cancel_protection);
 
             self.idx_lock.lock(io) catch unreachable;
             defer self.idx_lock.unlock(io);
 
-            for (self.cryptors, 0..) |*c, i| {
-                if (c == cryptor) {
-                    self.avail_idx = @as(u8, @truncate(i));
-                    self.avail_cond.signal(io);
-                    return;
-                }
-            }
+            const idx = cryptor - self.cryptors.ptr;
+            self.avail_idx = @as(u8, @truncate(idx));
+            self.avail_cond.signal(io);
         }
 
         pub fn claimChunkBuf(self: *@This(), op: Operation, io: std.Io) std.Io.Cancelable!*ChunkBufT {
@@ -76,7 +79,7 @@ pub fn PipeAdapter(comptime raw_side: bool) type {
                 try cbuf.chunk_buf.w_lock.lock(io);
                 defer cbuf.chunk_buf.w_lock.unlock(io);
 
-                if ((@intFromEnum(op) ^ @intFromEnum(cbuf.chunk_buf.empty)) == 0)
+                if ((@intFromEnum(op) ^ @intFromEnum(cbuf.chunk_buf.fill_state)) == 0)
                     return cbuf;
             }
 
@@ -84,12 +87,12 @@ pub fn PipeAdapter(comptime raw_side: bool) type {
         }
 
         pub fn unclaimChunkBuf(self: *@This(), used_buf: *ChunkBufT, perf_op: Operation, io: std.Io) void {
-            for (self.cryptors) |*cryptor| {
-                const cbuf: *ChunkBufT = if (raw_side) &cryptor.raw_file_cbuf else &cryptor.request_cbuf;
+            _ = self;
 
-                if (cbuf == used_buf)
-                    cbuf.chunk_buf.signalState(if (perf_op == .write) .full else .empty, io);
-            }
+            const old_cancel_protection = io.swapCancelProtection(.blocked);
+            defer _ = io.swapCancelProtection(old_cancel_protection);
+
+            used_buf.chunk_buf.setStateAndSignal(if (perf_op == .write) .full else .empty, io) catch unreachable;
         }
     };
 }

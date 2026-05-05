@@ -18,7 +18,7 @@ pub fn main(init: std.process.Init) !void {
             w.interface.writeByte('\n') catch return w.err.?;
 
             switch (e) {
-                error.UnknownCommand => std.log.err("unknown command: {s}", .{args[1]}),
+                error.UnknownCommand => std.log.err("unrecognized command: {s}", .{args[1]}),
                 error.NoArgsProvided => std.log.err("expected command argument", .{}),
                 error.InvalidSyntax => std.log.err("invalid syntax", .{}),
             }
