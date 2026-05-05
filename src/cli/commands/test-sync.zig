@@ -57,10 +57,19 @@ fn testSync(args: []const []const u8, emap: *std.process.Environ.Map, allocator:
     var file_record_map: FileRecordMap = .init(allocator);
     defer file_record_map.deinit();
 
-    const generic_record: FileRecordMap.FileRecord = .{
-        .blk_idx = 0,
+    const generic_chunk: FileRecordMap.FileChunk = .{
+        .blk_id = "blemblemblemblem".*,
+        .blk_offset = 0,
         .length = 1,
-        .offset = 0,
+    };
+
+    const generic_record: FileRecordMap.FileRecord = .{
+        .length = 1,
+        .num_blks = 1,
+        .chunks = &.{generic_chunk},
+        .opts = .{
+            .deleted = false,
+        },
         .path = "",
         .pfix_id = 0,
         .tstamp = .{

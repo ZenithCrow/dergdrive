@@ -53,6 +53,7 @@ pub const proto = struct {
 };
 
 pub const util = struct {
+    pub const slc = @import("util/slc.zig");
     pub const sort = @import("util/sort.zig");
 };
 

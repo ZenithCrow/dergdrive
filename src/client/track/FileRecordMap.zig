@@ -2,6 +2,8 @@ const std = @import("std");
 const Mutex = std.Io.Mutex;
 
 const Manifest = @import("Manifest.zig");
+const dergdrive = @import("dergdrive");
+const slc = dergdrive.util.slc;
 
 const FileRecordMap = @This();
 
@@ -11,18 +13,41 @@ pub const FileRecord = struct {
     path: []const u8,
     tstamp: Manifest.Timestamp,
     pfix_id: u32,
-    blk_idx: u32,
-    offset: u32,
+    num_blks: u32,
     length: u64,
+    chunks: []const FileChunk,
+    opts: FileRecordOptions,
 
     pub fn format(self: FileRecord, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.writeAll(self.path);
         try writer.writeInt(u8, 0, .little);
+
         try self.tstamp.format(writer);
         try writer.writeInt(u32, self.pfix_id, .little);
-        try writer.writeInt(u32, self.blk_idx, .little);
-        try writer.writeInt(u32, self.offset, .little);
+        try writer.writeInt(u32, self.num_blks, .little);
         try writer.writeInt(u64, self.length, .little);
+        try writer.writeStruct(self.opts, .little);
+
+        for (self.chunks) |c| {
+            try c.format(writer);
+        }
+    }
+};
+
+pub const FileRecordOptions = packed struct(u8) {
+    deleted: bool,
+    reserved: u7 = undefined,
+};
+
+pub const FileChunk = struct {
+    blk_id: [dergdrive.crypt.NameHashAlgo.digest_length]u8,
+    blk_offset: u32,
+    length: u32,
+
+    pub fn format(self: FileChunk, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try writer.writeAll(&self.blk_id);
+        try writer.writeInt(u32, self.blk_offset, .little);
+        try writer.writeInt(u32, self.length, .little);
     }
 };
 
@@ -196,13 +221,25 @@ test "get dir from file records" {
     var frmap: FileRecordMap = .init(allocator);
     defer frmap.deinit();
 
-    const generic_file_record: FileRecord = .{
-        .tstamp = .{ .mod_dev_id = 0, .mod_time = 0 },
-        .blk_idx = 0,
+    const generic_chunk: FileRecordMap.FileChunk = .{
+        .blk_id = "blemblemblemblem".*,
+        .blk_offset = 0,
         .length = 1,
-        .offset = 0,
+    };
+
+    const generic_file_record: FileRecordMap.FileRecord = .{
+        .length = 1,
+        .num_blks = 1,
+        .chunks = &.{generic_chunk},
+        .opts = .{
+            .deleted = false,
+        },
         .path = "owo",
         .pfix_id = 0,
+        .tstamp = .{
+            .mod_dev_id = 0,
+            .mod_time = 0,
+        },
     };
 
     try frmap.put(.borrowed("bar/owo/foo.txt"), generic_file_record);

@@ -1,7 +1,9 @@
 const std = @import("std");
 
-const Conf = @import("dergdrive").conf.Conf;
-const crypt = @import("dergdrive").crypt;
+const dergdrive = @import("dergdrive");
+const Conf = dergdrive.conf.Conf;
+const crypt = dergdrive.crypt;
+const slc = dergdrive.util.slc;
 
 const FileRecordMap = @import("FileRecordMap.zig");
 
@@ -49,29 +51,44 @@ const FileRecordIterator = struct {
     elem_idx: u64 = 0,
     elem_len: u64,
 
-    pub fn next(self: *@This()) ?FileRecordMap.FileRecord {
+    pub fn next(self: *@This(), allocator: std.mem.Allocator) std.mem.Allocator.Error!?FileRecordMap.FileRecord {
         if (self.byte_idx >= self.section_start.len or self.elem_idx >= self.elem_len)
             return null;
 
-        const path = std.mem.span(@as([*:0]const u8, @ptrCast(self.section_start.ptr)) + self.byte_idx);
-        const fixed_data_start = self.byte_idx + path.len + 1;
+        const buf = self.section_start[self.byte_idx..];
+        var reader = std.Io.Reader.fixed(buf);
 
-        const file_record: FileRecordMap.FileRecord = .{
-            .path = path,
-            .tstamp = .{
-                .mod_time = std.mem.readInt(i128, self.section_start[fixed_data_start .. fixed_data_start + @sizeOf(i128)][0..@sizeOf(i128)], .little),
-                .mod_dev_id = std.mem.readInt(u32, self.section_start[fixed_data_start + @sizeOf(i128) .. fixed_data_start + @sizeOf(i128) + @sizeOf(u32)][0..@sizeOf(u32)], .little),
-            },
-            .pfix_id = std.mem.readInt(u32, self.section_start[fixed_data_start + @sizeOf(i128) + @sizeOf(u32) .. fixed_data_start + @sizeOf(i128) + 2 * @sizeOf(u32)][0..@sizeOf(u32)], .little),
-            .blk_idx = std.mem.readInt(u32, self.section_start[fixed_data_start + @sizeOf(i128) + 2 * @sizeOf(u32) .. fixed_data_start + @sizeOf(i128) + 3 * @sizeOf(u32)][0..@sizeOf(u32)], .little),
-            .offset = std.mem.readInt(u32, self.section_start[fixed_data_start + @sizeOf(i128) + 3 * @sizeOf(u32) .. fixed_data_start + @sizeOf(i128) + 4 * @sizeOf(u32)][0..@sizeOf(u32)], .little),
-            .length = std.mem.readInt(u64, self.section_start[fixed_data_start + @sizeOf(i128) + 4 * @sizeOf(u32) .. fixed_data_start + @sizeOf(i128) + 4 * @sizeOf(u32) + @sizeOf(u64)][0..@sizeOf(u64)], .little),
-        };
+        const path = (reader.takeDelimiter(0) catch unreachable).?;
+        const tstamp_mod_time = reader.takeInt(i128, .little) catch unreachable;
+        const tstamp_mod_dev_id = reader.takeInt(u32, .little) catch unreachable;
+        const pfix_id = reader.takeInt(u32, .little) catch unreachable;
+        const num_blks = reader.takeInt(u32, .little) catch unreachable;
+        const length = reader.takeInt(u64, .little) catch unreachable;
+        const opts = reader.takeStruct(FileRecordMap.FileRecordOptions, .little) catch unreachable;
 
-        self.byte_idx += path.len + 1 + @sizeOf(i128) + 4 * @sizeOf(u32) + @sizeOf(u64);
+        const chunks = try allocator.alloc(FileRecordMap.FileChunk, num_blks);
+        for (chunks) |*c| {
+            const blk_id_len = crypt.NameHashAlgo.digest_length;
+            c.blk_id = (reader.take(blk_id_len) catch unreachable)[0..blk_id_len].*;
+            c.blk_offset = reader.takeInt(u32, .little) catch unreachable;
+            c.length = reader.takeInt(u32, .little) catch unreachable;
+        }
+
+        self.byte_idx += reader.seek;
         self.elem_idx += 1;
 
-        return file_record;
+        return .{
+            .path = path,
+            .tstamp = .{
+                .mod_time = tstamp_mod_time,
+                .mod_dev_id = tstamp_mod_dev_id,
+            },
+            .pfix_id = pfix_id,
+            .num_blks = num_blks,
+            .length = length,
+            .chunks = chunks,
+            .opts = opts,
+        };
     }
 };
 
@@ -107,10 +124,11 @@ const UnassignedPrefix = struct {
 };
 
 conf: Conf,
-mfest_file: ?[]const u8 = null,
+mfest_file: ?slc.SliceConstWithOwnerShip(u8) = null,
 is_local: bool = true,
 sync_tstamp: ?Timestamp = null,
 file_record_map: FileRecordMap,
+file_record_chunks_alloced: bool = false,
 local_pfixes: std.array_hash_map.Auto(u32, []const u8),
 oride_pfixes: std.array_hash_map.Auto(u32, []const u8),
 unassigned_pfixes: std.ArrayList(UnassignedPrefix),
@@ -130,9 +148,17 @@ pub fn init(conf: Conf, allocator: std.mem.Allocator, io: std.Io) Manifest {
 }
 
 pub fn deinit(self: *Manifest) void {
+    if (self.mfest_file) |mfest| {
+        mfest.deinit();
+    }
     self.mfest_file = null;
     self.sync_tstamp = null;
 
+    if (self.file_record_chunks_alloced) {
+        for (self.file_record_map.file_records.values()) |val| {
+            self.allocator.free(val.chunks);
+        }
+    }
     self.file_record_map.deinit();
 
     for (self.local_pfixes.values()) |value| {
@@ -150,9 +176,9 @@ pub fn deinit(self: *Manifest) void {
 }
 
 pub fn getSyncTimestamp(self: Manifest) LoadFromManifestFileError!Timestamp {
-    return if (self.mfest_file) |mfest| if (mfest.len < @sizeOf(i128) + @sizeOf(u32)) LoadFromManifestFileError.Illformed else .{
-        .mod_time = std.mem.readInt(i128, mfest[0..@sizeOf(i128)], .little),
-        .mod_dev_id = std.mem.readInt(u32, mfest[@sizeOf(i128) .. @sizeOf(i128) + @sizeOf(u32)], .little),
+    return if (self.mfest_file) |mfest| if (mfest.slc.len < @sizeOf(i128) + @sizeOf(u32)) LoadFromManifestFileError.Illformed else .{
+        .mod_time = std.mem.readInt(i128, mfest.slc[0..@sizeOf(i128)], .little),
+        .mod_dev_id = std.mem.readInt(u32, mfest.slc[@sizeOf(i128) .. @sizeOf(i128) + @sizeOf(u32)], .little),
     } else LoadFromManifestFileError.NotLoaded;
 }
 
@@ -170,18 +196,23 @@ pub fn getSyncTimestampFromCachedManifest(self: Manifest) GetSyncTimestampFromCa
     };
 
     var self_cpy = self;
-    self_cpy.mfest_file = &buf;
+    self_cpy.mfest_file = .borrowed(&buf);
     return self_cpy.getSyncTimestamp() catch unreachable;
 }
 
 pub fn openCachedManifest(self: *Manifest) Conf.GetConfError!void {
-    self.mfest_file = self.conf.getConf(self.conf.mfest_cache, self.allocator, self.io) catch |err| switch (err) {
-        Conf.GetConfError.FileNotFound => null,
-        else => {
-            self.mfest_file = null;
-            return err;
-        },
-    };
+    self.mfest_file = .owned(self.conf.getConf(self.conf.mfest_cache, self.allocator, self.io) catch |err| {
+        if (self.mfest_file) |mfest| {
+            mfest.deinit();
+        }
+
+        self.mfest_file = null;
+
+        return switch (err) {
+            Conf.GetConfError.FileNotFound => {},
+            else => err,
+        };
+    }, self.allocator);
 }
 
 pub fn loadLocalPrefixOverrides(self: *Manifest) LoadLocalPrefixOverridesError!void {
@@ -233,10 +264,10 @@ pub fn storeLocalPrefixOverrides(self: Manifest) StoreLocalPrefixOverridesError!
 
 fn getOverridePrefixIterator(self: Manifest) LoadFromManifestFileError!OridePrefixIterator {
     const mfest = self.mfest_file orelse return LoadFromManifestFileError.NotLoaded;
-    if (mfest.len < @sizeOf(i128) + @sizeOf(u32))
+    if (mfest.slc.len < @sizeOf(i128) + @sizeOf(u32))
         return LoadFromManifestFileError.Illformed;
 
-    const start_buf = mfest[@sizeOf(i128) + @sizeOf(u32) ..];
+    const start_buf = mfest.slc[@sizeOf(i128) + @sizeOf(u32) ..];
     return .{
         .elem_len = std.mem.readInt(u32, start_buf[0..@sizeOf(u32)], .little),
         .section_start = start_buf[@sizeOf(u32)..],
@@ -281,7 +312,8 @@ fn getFileRecordIterator(self: Manifest, oride_pfix_iter: ?OridePrefixIterator) 
 /// Passing a depleted `OridePrefixIterator` helps find the start of the file records section quicker.
 fn loadFileRecords(self: *Manifest, oride_pfix_iter: ?OridePrefixIterator) (LoadFromManifestFileError || std.mem.Allocator.Error)!void {
     var iter = try self.getFileRecordIterator(oride_pfix_iter);
-    while (iter.next()) |file_record| {
+    self.file_record_chunks_alloced = true;
+    while (try iter.next(self.allocator)) |file_record| {
         const local_fp: FileRecordMap.FileRecordKey = blk: {
             if (self.local_pfixes.get(file_record.pfix_id)) |local_pfix| {
                 if (self.oride_pfixes.get(file_record.pfix_id)) |oride_pfix| {
@@ -371,17 +403,26 @@ test "manifest parsing" {
     defer manifest.deinit();
 
     manifest.sync_tstamp = .{ .mod_dev_id = 5, .mod_time = 0 };
-    manifest.mfest_file = &.{};
+    manifest.mfest_file = .borrowed(&.{});
 
     try manifest.oride_pfixes.put(allocator, 2, "foo/bar");
     try manifest.oride_pfixes.put(allocator, 1, "override/me");
 
     try manifest.local_pfixes.put(allocator, 1, try allocator.dupe(u8, "owo/owo"));
 
+    const generic_chunk: FileRecordMap.FileChunk = .{
+        .blk_id = "blemblemblemblem".*,
+        .blk_offset = 0,
+        .length = 1,
+    };
+
     const rec1: FileRecordMap.FileRecord = .{
-        .blk_idx = 69,
         .length = 98425,
-        .offset = 88,
+        .chunks = &.{generic_chunk},
+        .num_blks = 1,
+        .opts = .{
+            .deleted = false,
+        },
         .path = "foo/owo",
         .pfix_id = 0,
         .tstamp = .{
@@ -391,9 +432,12 @@ test "manifest parsing" {
     };
 
     const rec2: FileRecordMap.FileRecord = .{
-        .blk_idx = 77,
         .length = 885822,
-        .offset = 122,
+        .num_blks = 1,
+        .chunks = &.{generic_chunk},
+        .opts = .{
+            .deleted = false,
+        },
         .path = "override/me",
         .pfix_id = 1,
         .tstamp = .{
@@ -411,7 +455,7 @@ test "manifest parsing" {
 
     try manifest.storeManifest(&writer.writer);
 
-    manifest.mfest_file = writer.written();
+    manifest.mfest_file = .borrowed(writer.written());
     try manifest.loadManifest();
 
     try std.testing.expectEqualDeep(rec1, manifest.file_record_map.file_records.get(.borrowed("foo/owo")).?);
