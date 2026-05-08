@@ -1,41 +1,59 @@
 const std = @import("std");
+pub const CreateFilePushReqError = std.mem.Allocator.Error;
 
-const sync = @import("dergdrive").proto.sync;
+const dergdrive = @import("dergdrive");
+const sync = dergdrive.proto.sync;
 const RequestChunk = sync.RequestChunk;
+const shared_slice = dergdrive.util.shared_slice;
 
 const RawFileChunkBuffer = @import("RawFileChunkBuffer.zig");
 
 const RequestStorage = @This();
 
-pub const RequestParams = union {
-    file_post: struct {
+pub const RequestParams = union(RequestChunk.RequestType) {
+    vol_add,
+    vol_delete,
+    mfest_fetch,
+    mfest_post,
+    files_request: void,
+    file_new: struct {
+        path: *shared_slice.SharedString,
+    },
+    file_push: struct {
+        path: *shared_slice.SharedString,
         dest: sync.DestChunk,
     },
-    file_new: struct {
-        length: sync.DestChunk,
-    },
+    file_delete: void,
 };
 
-pub const Response = union {
-    file_post: void,
+pub const Response = union(RequestChunk.RequestType) {
+    vol_add,
+    vol_delete,
+    mfest_fetch,
+    mfest_post,
+    files_request,
     file_new: struct {
         dest: sync.DestChunk,
     },
+    file_push: struct {
+        reloc: sync.DestChunk,
+    },
+    file_delete: void,
 };
 
 pub const Request = struct {
     id: RequestChunk.IdT,
-    req_type: RequestChunk.RequestType,
     resp_code: RequestChunk.ResponseCode = .resp_no_error,
     n_sent: usize = 0,
-    req: RequestParams,
+    query: RequestParams,
     resp: ?Response = null,
     finished: bool = false,
 };
 
 id_supply: RequestChunk.IdSupplier,
 reqs: std.array_hash_map.Auto(RequestChunk.IdT, Request),
-reqs_lock: std.Io.Mutex,
+string_stor: shared_slice.SharedStringStorage,
+lock: std.Io.Mutex,
 
 reqs_piped: usize = 0,
 reqs_complete: usize = 0,
@@ -45,26 +63,47 @@ reqs_complete_cond: std.Io.Condition = .init,
 pub const init: @This() = .{
     .id_supply = .init,
     .reqs = .empty,
-    .reqs_lock = .init,
+    .string_stor = .empty,
+    .lock = .init,
 };
 
-pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-    self.reqs.deinit(allocator);
+pub fn deinit(self: *@This(), gpa: std.mem.Allocator) void {
+    self.reqs.deinit(gpa);
+    self.string_stor.deinitAll(gpa);
 }
 
-pub fn newPushFileNew(self: *RequestStorage, allocator: std.mem.Allocator, io: std.Io) std.mem.Allocator.Error!RequestChunk.IdT {
-    const old_cancel_protection = io.swapCancelProtection(.blocked);
-    defer _ = io.swapCancelProtection(old_cancel_protection);
-
+pub fn createFileNewReq(self: *RequestStorage, path: []const u8, gpa: std.mem.Allocator, io: std.Io) std.mem.Allocator.Error!RequestChunk.IdT {
     const req_id = self.id_supply.takeId(io);
 
-    self.reqs_lock.lock(io) catch unreachable;
-    defer self.reqs_lock.unlock(io);
+    self.lock.lockUncancelable(io);
+    defer self.lock.unlock(io);
 
-    try self.reqs.putNoClobber(allocator, req_id, .{
+    var sh_str = try self.string_stor.getOrPut(path, gpa);
+
+    try self.reqs.putNoClobber(gpa, req_id, .{
         .id = req_id,
-        .req_type = .file_new,
-        .req = .{ .file_new = undefined },
+        .query = .{ .file_new = .{
+            .path = sh_str.ref(),
+        } },
+    });
+
+    return req_id;
+}
+
+pub fn createFilePushReq(self: *RequestStorage, path: []const u8, dest: sync.DestChunk, gpa: std.mem.Allocator, io: std.Io) CreateFilePushReqError!RequestChunk.IdT {
+    const req_id = self.id_supply.takeId(io);
+
+    self.lock.lockUncancelable(io);
+    defer self.lock.unlock(io);
+
+    var sh_str = try self.string_stor.getOrPut(path, gpa);
+
+    try self.reqs.putNoClobber(gpa, req_id, .{
+        .id = req_id,
+        .query = .{ .file_push = .{
+            .path = sh_str.ref(),
+            .dest = dest,
+        } },
     });
 
     return req_id;

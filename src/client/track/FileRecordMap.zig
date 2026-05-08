@@ -1,9 +1,10 @@
 const std = @import("std");
 const Mutex = std.Io.Mutex;
 
-const Manifest = @import("Manifest.zig");
 const dergdrive = @import("dergdrive");
 const slc = dergdrive.util.slc;
+
+const Manifest = @import("Manifest.zig");
 
 const FileRecordMap = @This();
 
@@ -222,7 +223,7 @@ test "get dir from file records" {
     defer frmap.deinit();
 
     const generic_chunk: FileRecordMap.FileChunk = .{
-        .blk_id = "blemblemblemblem".*,
+        .blk_id = "blemblem".*,
         .blk_offset = 0,
         .length = 1,
     };

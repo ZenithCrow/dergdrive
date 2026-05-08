@@ -46,7 +46,7 @@ pub fn newMsg(self: *TransmitFileMsg, payload_size: u32, req_type: sync.RequestC
 
     self.rq_chunk.id = id;
     self.rq_chunk.request_type = switch (req_type) {
-        .file_post, .file_new => req_type,
+        .file_push, .file_new => req_type,
         else => return NewMsgError.UnsupportedRequestType,
     };
     self.rq_chunk.resp_code = .resp_no_error;
@@ -72,7 +72,7 @@ test "newMsg payload size matches" {
     var buf: [TransmitFileMsg.non_payload_size + payload_size + 1024]u8 = undefined;
 
     var tfm: TransmitFileMsg = try .init(&buf);
-    const pld_buf = try tfm.newMsg(payload_size, .file_post, 0);
+    const pld_buf = try tfm.newMsg(payload_size, .file_push, 0);
     try std.testing.expectEqual(payload_size, pld_buf.len);
     try std.testing.expectEqual(payload_size + TransmitFileMsg.non_payload_size, try tfm.msg_container.getMsgSize());
 }

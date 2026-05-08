@@ -411,7 +411,7 @@ test "manifest parsing" {
     try manifest.local_pfixes.put(allocator, 1, try allocator.dupe(u8, "owo/owo"));
 
     const generic_chunk: FileRecordMap.FileChunk = .{
-        .blk_id = "blemblemblemblem".*,
+        .blk_id = "blemblem".*,
         .blk_offset = 0,
         .length = 1,
     };

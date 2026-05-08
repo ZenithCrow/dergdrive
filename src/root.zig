@@ -55,10 +55,11 @@ pub const proto = struct {
 pub const util = struct {
     pub const slc = @import("util/slc.zig");
     pub const sort = @import("util/sort.zig");
+    pub const shared_slice = @import("util/shared_slice.zig");
 };
 
 // pulled from zig 0.15 implementation
-pub fn refAllDeclsRecursive(comptime T: type) void {
+fn refAllDeclsRecursive(comptime T: type) void {
     if (!builtin.is_test) return;
     inline for (comptime std.meta.declarations(T)) |decl| {
         if (@TypeOf(@field(T, decl.name)) == type) {

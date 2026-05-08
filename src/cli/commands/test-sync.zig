@@ -1,6 +1,6 @@
 const std = @import("std");
-const dergdrive = @import("dergdrive");
 
+const dergdrive = @import("dergdrive");
 const cli = dergdrive.cli;
 const IncludeTree = dergdrive.client.track.IncludeTree;
 const FileRecordMap = dergdrive.client.track.FileRecordMap;
@@ -58,7 +58,7 @@ fn testSync(args: []const []const u8, emap: *std.process.Environ.Map, allocator:
     defer file_record_map.deinit();
 
     const generic_chunk: FileRecordMap.FileChunk = .{
-        .blk_id = "blemblemblemblem".*,
+        .blk_id = "blemblem".*,
         .blk_offset = 0,
         .length = 1,
     };

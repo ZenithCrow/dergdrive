@@ -43,7 +43,7 @@ pub const RequestType = enum(RequestTagT) {
     mfest_post,
     files_request,
     file_new,
-    file_post,
+    file_push,
     file_delete,
     _,
 };

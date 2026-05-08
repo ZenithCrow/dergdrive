@@ -135,8 +135,8 @@ pub fn pipeEncrypted(self: *Cryptor, io: std.Io) std.Io.Cancelable!void {
         defer _ = io.swapCancelProtection(old_cancel_protection);
 
         const req = lock_blk: {
-            self.cluster.request_storage.reqs_lock.lock(io) catch unreachable;
-            defer self.cluster.request_storage.reqs_lock.unlock(io);
+            self.cluster.request_storage.lock.lock(io) catch unreachable;
+            defer self.cluster.request_storage.lock.unlock(io);
 
             break :lock_blk self.cluster.request_storage.reqs.get(self.raw_file_cbuf.req_id.?).?;
         };
@@ -148,16 +148,16 @@ pub fn pipeEncrypted(self: *Cryptor, io: std.Io) std.Io.Cancelable!void {
 
         const out_buf_all = self.request_cbuf.trns_msg.newMsg(
             @as(u32, @intCast(in_buf.len)) + crypt.nonce_auth_len,
-            req.req_type,
+            req.query,
             req.id,
         ) catch unreachable;
 
         self.request_cbuf.req_id = self.raw_file_cbuf.req_id;
-        self.request_cbuf.trns_msg.dest_chunk.copyValues(switch (req.req_type) {
-            .file_post => req.req.file_post.dest,
-            .file_new => req.req.file_new.length,
+        switch (req.query) {
+            .file_push => |f_push| self.request_cbuf.trns_msg.dest_chunk.copyValues(f_push.dest),
+            .file_new => {},
             else => unreachable,
-        });
+        }
         self.request_cbuf.trns_msg.dest_chunk.write();
 
         var auth_tag: [crypt.AesAlgo.tag_length]u8 = undefined;

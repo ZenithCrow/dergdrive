@@ -4,11 +4,7 @@ const Dir = std.Io.Dir;
 
 const dergdrive = @import("dergdrive");
 const sync = dergdrive.proto.sync;
-const track = dergdrive.client.track;
-const IncludeTree = track.IncludeTree;
-const SyncOp = track.SyncOp;
-const Manifest = track.Manifest;
-const FileRecordMap = track.FileRecordMap;
+const FileRecordMap = dergdrive.client.track.FileRecordMap;
 
 const pipe_adapter = @import("pipe_adapter.zig");
 const RawFileChunkBuffer = @import("RawFileChunkBuffer.zig");
@@ -19,7 +15,7 @@ const FileReader = @This();
 raw_file_adapter: *pipe_adapter.RawFilePipeAdapter,
 req_stor: *RequestStorage,
 
-pub const PipeFileError = File.LengthError || File.Reader.Error;
+pub const PipeFileError = File.LengthError || File.Reader.Error || std.mem.Allocator.Error;
 pub const PipeDirError = error{IncompleteTransaction} || std.mem.Allocator.Error;
 
 const log = std.log.scoped(.@"client/transmit/FileReader");
@@ -31,23 +27,22 @@ pub const iter_dir_error_notice = "Couldn't properly iterate directory due to er
 pub const open_dir_error_notice = "Couldn't open directory \"{s}\" due to error {t}.";
 pub const dir_transaction_error_notice = "Transaction of directory \"{s}\" is only partially successful.";
 
-pub fn pipeFile(self: *FileReader, file: File, req_id: sync.RequestChunk.IdT, io: std.Io) PipeFileError!void {
+pub const PipeInfo = union(enum) {
+    file_new: struct {
+        path: []const u8,
+    },
+    file_push: struct { path: []const u8, dests: []FileRecordMap.FileChunk },
+};
+
+pub fn pipeFile(self: *FileReader, file: File, pipe_info: PipeInfo, gpa: std.mem.Allocator, io: std.Io) PipeFileError!void {
     var piped_size: usize = 0;
     const file_size = try file.length(io);
     var reader = file.reader(io, &.{});
 
-    {
-        try self.req_stor.reqs_lock.lock(io);
-        defer self.req_stor.reqs_lock.unlock(io);
+    var idx_sent: usize = 0;
+    var local_pi = pipe_info;
 
-        const req = self.req_stor.reqs.getPtr(req_id).?;
-        switch (req.req_type) {
-            .file_new => req.req.file_new.length.writeFileNewRequest(file_size),
-            else => {},
-        }
-    }
-
-    while (piped_size < file_size) {
+    while (piped_size < file_size) : (idx_sent += 1) {
         {
             try self.req_stor.reqs_complete_lock.lock(io);
             defer self.req_stor.reqs_complete_lock.unlock(io);
@@ -62,7 +57,21 @@ pub fn pipeFile(self: *FileReader, file: File, req_id: sync.RequestChunk.IdT, io
             log.debug("unclaimed chunk buffer", .{});
         }
 
-        rf_chunk_buf.req_id = req_id;
+        // start opening `file_new` requests if not enough existing chunks
+        if (local_pi == .file_push and idx_sent > local_pi.file_push.dests.len - 1) {
+            local_pi = .{ .file_new = .{
+                .path = local_pi.file_push.path,
+            } };
+        }
+
+        rf_chunk_buf.req_id = switch (local_pi) {
+            .file_new => |f_new| try self.req_stor.createFileNewReq(f_new.path, gpa, io),
+            .file_push => |f_push| blk: {
+                const file_chunk = &f_push.dests[idx_sent];
+                const dest: sync.DestChunk = .justValues(file_chunk.blk_id, file_chunk.length, file_chunk.blk_offset);
+                break :blk try self.req_stor.createFilePushReq(f_push.path, dest, gpa, io);
+            },
+        };
 
         const bytes_read = reader.interface.readSliceShort(rf_chunk_buf.chunk_buf.buf) catch {
             //  TODO: handle specific error

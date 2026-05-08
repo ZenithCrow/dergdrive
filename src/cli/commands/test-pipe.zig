@@ -1,6 +1,6 @@
 const std = @import("std");
-const dergdrive = @import("dergdrive");
 
+const dergdrive = @import("dergdrive");
 const cli = dergdrive.cli;
 const transmit = dergdrive.client.transmit;
 const FileReader = transmit.FileReader;
@@ -57,10 +57,12 @@ fn testPipe(args: []const []const u8, emap: *const std.process.Environ.Map, allo
     try req_sender.start(io);
     defer req_sender.stop(io);
 
-    const file = try std.Io.Dir.cwd().openFile(io, "/home/vlcaak/wallpapers/autumn-forest-view.png", .{});
+    const file_path = "/home/vlcaak/wallpapers/autumn-forest-view.png";
+    const file = try std.Io.Dir.cwd().openFile(io, file_path, .{});
     defer file.close(io);
 
-    try file_reader.pipeFile(file, try req_stor.newPushFileNew(allocator, io), io);
+    const pipe_info: FileReader.PipeInfo = .{ .file_new = .{ .path = file_path } };
+    try file_reader.pipeFile(file, pipe_info, allocator, io);
 
     try req_stor.reqs_complete_lock.lock(io);
     defer req_stor.reqs_complete_lock.unlock(io);
