@@ -1,29 +1,43 @@
 const std = @import("std");
-pub const CreateFilePushReqError = std.mem.Allocator.Error;
 
 const dergdrive = @import("dergdrive");
 const sync = dergdrive.proto.sync;
 const RequestChunk = sync.RequestChunk;
 const shared_slice = dergdrive.util.shared_slice;
+const FileRecordMap = dergdrive.client.track.FileRecordMap;
 
 const RawFileChunkBuffer = @import("RawFileChunkBuffer.zig");
 
 const RequestStorage = @This();
 
-pub const RequestParams = union(RequestChunk.RequestType) {
+pub const Query = union(RequestChunk.RequestType) {
     vol_add,
     vol_delete,
     mfest_fetch,
     mfest_post,
-    files_request: void,
-    file_new: struct {
+    chunk_new: struct {
         path: *shared_slice.SharedString,
+        local_fi: FileRecordMap.FileChunk.LocalFileInfo,
     },
-    file_push: struct {
+    chunk_update: struct {
         path: *shared_slice.SharedString,
-        dest: sync.DestChunk,
+        dest: sync.DestChunk.Query,
+        local_fi: FileRecordMap.FileChunk.LocalFileInfo,
     },
-    file_delete: void,
+    chunks_fetch: struct {
+        path: *shared_slice.SharedString,
+        local_fi: FileRecordMap.FileChunk.LocalFileInfo,
+    },
+    chunks_del: struct {
+        path: *shared_slice.SharedString,
+        // only using the DestChunk.Query part
+        del_dests: []const FileRecordMap.FileChunk,
+        del_start_idx: usize,
+    },
+    unit_abort: struct {
+        file_req_ids: []const RequestChunk.IdT,
+    },
+    trans_abort: void,
 };
 
 pub const Response = union(RequestChunk.RequestType) {
@@ -31,26 +45,28 @@ pub const Response = union(RequestChunk.RequestType) {
     vol_delete,
     mfest_fetch,
     mfest_post,
-    files_request,
-    file_new: struct {
-        dest: sync.DestChunk,
+    chunk_new: struct {
+        dest: sync.DestChunk.Query,
     },
-    file_push: struct {
-        reloc: sync.DestChunk,
+    chunk_update: struct {
+        reloc: sync.DestChunk.Query,
     },
-    file_delete: void,
+    chunks_fetch: void,
+    chunks_del: void,
+    unit_abort: void,
+    trans_abort: void,
 };
 
 pub const Request = struct {
     id: RequestChunk.IdT,
     resp_code: RequestChunk.ResponseCode = .resp_no_error,
     n_sent: usize = 0,
-    query: RequestParams,
+    query: Query,
     resp: ?Response = null,
     finished: bool = false,
 };
 
-id_supply: RequestChunk.IdSupplier,
+id_supply: RequestChunk.IdSupplier(.client),
 reqs: std.array_hash_map.Auto(RequestChunk.IdT, Request),
 string_stor: shared_slice.SharedStringStorage,
 lock: std.Io.Mutex,
@@ -72,39 +88,99 @@ pub fn deinit(self: *@This(), gpa: std.mem.Allocator) void {
     self.string_stor.deinitAll(gpa);
 }
 
-pub fn createFileNewReq(self: *RequestStorage, path: []const u8, gpa: std.mem.Allocator, io: std.Io) std.mem.Allocator.Error!RequestChunk.IdT {
-    const req_id = self.id_supply.takeId(io);
+fn createChunkReq(
+    self: *RequestStorage,
+    path: []const u8,
+    query: Query,
+    gpa: std.mem.Allocator,
+    io: std.Io,
+) std.mem.Allocator.Error!RequestChunk.IdT {
+    switch (query) {
+        .chunk_new, .chunk_update, .chunks_del, .chunks_fetch => {
+            const req_id = self.id_supply.takeId(io);
 
-    self.lock.lockUncancelable(io);
-    defer self.lock.unlock(io);
+            self.lock.lockUncancelable(io);
+            defer self.lock.unlock(io);
 
-    var sh_str = try self.string_stor.getOrPut(path, gpa);
+            var sh_str = try self.string_stor.getOrPut(path, gpa);
+            var q_mut = query;
+            switch (q_mut) {
+                .chunk_new => |*q| q.path = sh_str.ref(),
+                .chunk_update => |*q| q.path = sh_str.ref(),
+                .chunks_del => |*q| q.path = sh_str.ref(),
+                .chunks_fetch => |*q| q.path = sh_str.ref(),
+                else => unreachable,
+            }
 
-    try self.reqs.putNoClobber(gpa, req_id, .{
-        .id = req_id,
-        .query = .{ .file_new = .{
-            .path = sh_str.ref(),
-        } },
-    });
+            try self.reqs.putNoClobber(gpa, req_id, .{
+                .id = req_id,
+                .query = q_mut,
+            });
 
-    return req_id;
+            return req_id;
+        },
+        else => @panic("only chunk request types allowed"),
+    }
 }
 
-pub fn createFilePushReq(self: *RequestStorage, path: []const u8, dest: sync.DestChunk, gpa: std.mem.Allocator, io: std.Io) CreateFilePushReqError!RequestChunk.IdT {
-    const req_id = self.id_supply.takeId(io);
+pub fn createChunkNewReq(
+    self: *RequestStorage,
+    path: []const u8,
+    local_fi: FileRecordMap.FileChunk.LocalFileInfo,
+    gpa: std.mem.Allocator,
+    io: std.Io,
+) std.mem.Allocator.Error!RequestChunk.IdT {
+    return try self.createChunkReq(path, .{ .chunk_new = .{
+        .path = undefined,
+        .local_fi = local_fi,
+    } }, gpa, io);
+}
+
+pub fn createChunkUpdateReq(
+    self: *RequestStorage,
+    path: []const u8,
+    dest: sync.DestChunk.Query,
+    local_fi: FileRecordMap.FileChunk.LocalFileInfo,
+    gpa: std.mem.Allocator,
+    io: std.Io,
+) std.mem.Allocator.Error!RequestChunk.IdT {
+    return try self.createChunkReq(path, .{ .chunk_update = .{
+        .path = undefined,
+        .dest = dest,
+        .local_fi = local_fi,
+    } }, gpa, io);
+}
+
+pub fn createChunksDelReq(
+    self: *RequestStorage,
+    path: []const u8,
+    del_dests: []const FileRecordMap.FileChunk,
+    del_start_idx: usize,
+    gpa: std.mem.Allocator,
+    io: std.Io,
+) std.mem.Allocator.Error!RequestChunk.IdT {
+    return try self.createChunkReq(path, .{ .chunks_del = .{
+        .path = undefined,
+        .del_dests = del_dests,
+        .del_start_idx = del_start_idx,
+    } }, gpa, io);
+}
+
+pub fn gatherFileReqsIds(self: *RequestStorage, path: []const u8, gpa: std.mem.Allocator, io: std.Io) std.mem.Allocator.Error![]const RequestChunk.IdT {
+    var id_list: std.ArrayList(RequestChunk.IdT) = .empty;
 
     self.lock.lockUncancelable(io);
     defer self.lock.unlock(io);
 
-    var sh_str = try self.string_stor.getOrPut(path, gpa);
+    for (self.reqs.values()) |val| {
+        switch (val.query) {
+            .chunk_new => |q| if (std.mem.eql(u8, q.path.slice, path)) try id_list.append(gpa, val.id),
+            .chunk_update => |q| if (std.mem.eql(u8, q.path.slice, path)) try id_list.append(gpa, val.id),
+            .chunks_del => |q| if (std.mem.eql(u8, q.path.slice, path)) try id_list.append(gpa, val.id),
+            .chunks_fetch => |q| if (std.mem.eql(u8, q.path.slice, path)) try id_list.append(gpa, val.id),
+            else => {},
+        }
+    }
 
-    try self.reqs.putNoClobber(gpa, req_id, .{
-        .id = req_id,
-        .query = .{ .file_push = .{
-            .path = sh_str.ref(),
-            .dest = dest,
-        } },
-    });
-
-    return req_id;
+    return id_list.items;
 }

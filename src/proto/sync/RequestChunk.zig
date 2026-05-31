@@ -13,44 +13,60 @@ pub const request_type_size = @sizeOf(RequestType);
 pub const resp_code_size = @sizeOf(RespCodeTagT);
 pub const content_size = id_size + request_type_size + resp_code_size;
 
-pub const IdSupplier = struct {
-    id_rw_lock: Mutex,
-    next_id: IdT,
-
-    pub const init: @This() = .{
-        .id_rw_lock = .init,
-        .next_id = 0,
-    };
-
-    pub fn takeId(self: *IdSupplier, io: std.Io) IdT {
-        const old_cancel_protection = io.swapCancelProtection(.blocked);
-        defer _ = io.swapCancelProtection(old_cancel_protection);
-
-        self.id_rw_lock.lock(io) catch unreachable;
-        defer self.id_rw_lock.unlock(io);
-
-        const id = self.next_id;
-        self.next_id += 1;
-        return id;
-    }
+pub const IdSupplierRole = enum {
+    client,
+    server,
 };
+
+pub fn IdSupplier(role: IdSupplierRole) type {
+    return struct {
+        pub const InternalIdT = @Int(.unsigned, @typeInfo(IdT).int.bits - 1);
+        pub const reserved_failure_id = std.math.maxInt(InternalIdT);
+
+        id_rw_lock: Mutex,
+        next_id: InternalIdT,
+
+        pub const init: @This() = .{
+            .id_rw_lock = .init,
+            .next_id = 0,
+        };
+
+        pub fn takeId(self: *@This(), io: std.Io) IdT {
+            self.id_rw_lock.lockUncancelable(io);
+            defer self.id_rw_lock.unlock(io);
+
+            const id = self.next_id;
+            self.next_id +%= 1;
+
+            if (self.next_id == reserved_failure_id)
+                self.next_id +%= 1;
+
+            return switch (comptime role) {
+                .client => @intCast(id),
+                .server => @as(IdT, @intCast(id)) + 1 << (@typeInfo(IdT).int.bits - 1),
+            };
+        }
+    };
+}
 
 pub const RequestTagT = u16;
 pub const RequestType = enum(RequestTagT) {
-    vol_add,
+    vol_add = 1,
     vol_delete,
     mfest_fetch,
     mfest_post,
-    files_request,
-    file_new,
-    file_push,
-    file_delete,
+    chunk_new,
+    chunk_update,
+    chunks_fetch,
+    chunks_del,
+    unit_abort,
+    trans_abort,
     _,
 };
 
 pub const RespCodeTagT = u16;
 pub const ResponseCode = enum(RespCodeTagT) {
-    is_request,
+    is_request = 1,
     ok,
     generic_error,
     _,

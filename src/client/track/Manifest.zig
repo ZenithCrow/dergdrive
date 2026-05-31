@@ -68,10 +68,13 @@ const FileRecordIterator = struct {
 
         const chunks = try allocator.alloc(FileRecordMap.FileChunk, num_blks);
         for (chunks) |*c| {
-            const blk_id_len = crypt.NameHashAlgo.digest_length;
-            c.blk_id = (reader.take(blk_id_len) catch unreachable)[0..blk_id_len].*;
+            c.blk_id = (reader.takeInt(u64, .little) catch unreachable);
             c.blk_offset = reader.takeInt(u32, .little) catch unreachable;
-            c.length = reader.takeInt(u32, .little) catch unreachable;
+            c.encoded_len = reader.takeInt(u32, .little) catch unreachable;
+            c.local_fi = .{
+                .file_offset = reader.takeInt(u64, .little) catch unreachable,
+                .real_len = reader.takeInt(u32, .little) catch unreachable,
+            };
         }
 
         self.byte_idx += reader.seek;
@@ -411,9 +414,13 @@ test "manifest parsing" {
     try manifest.local_pfixes.put(allocator, 1, try allocator.dupe(u8, "owo/owo"));
 
     const generic_chunk: FileRecordMap.FileChunk = .{
-        .blk_id = "blemblem".*,
+        .blk_id = 0,
         .blk_offset = 0,
-        .length = 1,
+        .encoded_len = 1,
+        .local_fi = .{
+            .file_offset = 0,
+            .real_len = 1,
+        },
     };
 
     const rec1: FileRecordMap.FileRecord = .{

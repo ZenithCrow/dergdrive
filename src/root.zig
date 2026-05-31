@@ -30,6 +30,7 @@ pub const client = struct {
         pub const RequestSender = @import("client/transmit/RequestSender.zig");
         pub const RequestStorage = @import("client/transmit/RequestStorage.zig");
         pub const pipe_adapter = @import("client/transmit/pipe_adapter.zig");
+        pub const PrioRequest = @import("client/transmit/PrioRequest.zig");
     };
 };
 
@@ -42,12 +43,15 @@ pub const proto = struct {
     pub const sync = struct {
         pub const SyncMessage = @import("proto/sync/SyncMessage.zig");
         pub const RequestChunk = @import("proto/sync/RequestChunk.zig");
+        pub const BreakChunk = @import("proto/sync/BreakChunk.zig");
         pub const header = @import("proto/sync/header.zig");
         pub const Chunk = @import("proto/sync/Chunk.zig");
         pub const DestChunk = @import("proto/sync/DestChunk.zig");
         pub const PayloadChunk = @import("proto/sync/PayloadChunk.zig");
         pub const templates = struct {
-            pub const TransmitFileMsg = @import("proto/sync/templates/TransmitFileMsg.zig");
+            pub const TransmitChunkMsg = @import("proto/sync/templates/TransmitChunkMsg.zig");
+            pub const MultipleDestChunksMsg = @import("proto/sync/templates/MultipleDestChunksMsg.zig");
+            pub const TransactionAbortMsg = @import("proto/sync/templates/TransactionAbortMsg.zig");
         };
     };
 };

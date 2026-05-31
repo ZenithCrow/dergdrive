@@ -8,6 +8,7 @@ pub const nonce_auth_len = AesAlgo.nonce_length + AesAlgo.tag_length;
 pub const key_path: []const u8 = "scrtkey";
 
 pub const NameHashAlgo = struct {
+    // truncating
     pub const digest_length = 8;
     pub const Algo = std.crypto.hash.blake2.Blake2b128;
 };

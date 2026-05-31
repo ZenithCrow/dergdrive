@@ -2,13 +2,7 @@
     .name = .dergdrive,
     .version = "0.1.0",
     .fingerprint = 0xbfb496ab9a7c5878,
-    .minimum_zig_version = "0.15.1",
-    .dependencies = .{
-        .znetw = .{
-            .url = "https://github.com/ZenithMeetsNadir/znetw/archive/refs/tags/v0.3.0.tar.gz",
-            .hash = "znetw-0.3.0-Kri0-j-AAADv4JI9_0xq8p52_Q3XBfOzv2Wu3WIipj96",
-        },
-    },
+    .minimum_zig_version = "0.16.0",
     .paths = .{
         "build.zig",
         "build.zig.zon",

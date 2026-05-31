@@ -4,7 +4,7 @@
 # # foo/owo <- prefix at origin
 # 05fc4a7b=bar/owo
 #     ^\     ^- overrididing prefix
-#       \- assigned prefix id (do not edit this)
+#       \- assigned prefix id (do not edit this once it is assigned)
 #
 # When a file with path prefix override is synced, it will be placed into location specified by the overrididing prefix.
 # In this example, file "foo/owo" at the origin will be located at "bar/owo" on this machine. 
@@ -17,7 +17,7 @@
 #
 # and it will be assigned a prefix id upon the next sync.
 #
-# If the prefix at origin happens to be the exact same format as the previously mentioned prefix id, add a '/' at the end.
+# If the prefix at origin happens to be the exact same format as the previously mentioned prefix id (64-bit unsigned integer in hex), add a '/' at the end.
 # In this example: 
 #
 # 05fc4a7b/=bar/owo

@@ -58,9 +58,13 @@ fn testSync(args: []const []const u8, emap: *std.process.Environ.Map, allocator:
     defer file_record_map.deinit();
 
     const generic_chunk: FileRecordMap.FileChunk = .{
-        .blk_id = "blemblem".*,
+        .blk_id = 0,
         .blk_offset = 0,
-        .length = 1,
+        .encoded_len = 1,
+        .local_fi = .{
+            .file_offset = 0,
+            .real_len = 1,
+        },
     };
 
     const generic_record: FileRecordMap.FileRecord = .{
@@ -99,7 +103,7 @@ fn testSync(args: []const []const u8, emap: *std.process.Environ.Map, allocator:
         .io = io,
     };
 
-    try unit_sync.syncRootDirApplyRules(&sync_ctx, param_vals.root_dir_iterable, sync_op, file_record_map, tree);
+    try unit_sync.syncRootDirApplyRules(sync_ctx, param_vals.root_dir_iterable, sync_op, file_record_map, tree);
 }
 
 const file_record_keys = [_][]const u8{

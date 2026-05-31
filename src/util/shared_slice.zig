@@ -14,6 +14,7 @@ pub fn SharedSlice(comptime T: type) type {
             };
         }
 
+        /// decrements the reference count and possibly frees the slice if the ref count has reached 0
         pub fn deinit(self: *@This()) void {
             if (self.ref_count > 0) {
                 self.ref_count -= 1;
@@ -23,11 +24,14 @@ pub fn SharedSlice(comptime T: type) type {
             }
         }
 
-        pub fn deinitAll(self: *@This()) void {
+        /// frees the slice even if there are still hanging references
+        /// idempotent
+        pub fn deinitForce(self: *@This()) void {
             if (self.ref_count > 0)
                 self.gpa.free(self.slice);
         }
 
+        /// increments the reference count
         pub fn ref(self: *@This()) *@This() {
             self.ref_count += 1;
             return self;
@@ -50,12 +54,13 @@ pub const SharedStringStorage = struct {
 
     pub fn deinitAll(self: *@This(), gpa: std.mem.Allocator) void {
         for (self.storage.values()) |*entry| {
-            entry.deinitAll();
+            entry.deinitForce();
         }
 
         self.deinitMapOnly(gpa);
     }
 
+    /// dupes the string if it's being put in for the first time
     pub fn getOrPut(self: *@This(), str: []const u8, gpa: std.mem.Allocator) std.mem.Allocator.Error!*SharedString {
         return if (self.storage.contains(str)) self.storage.getPtr(str).? else blk: {
             var val: SharedString = .init(try gpa.dupe(u8, str), gpa);

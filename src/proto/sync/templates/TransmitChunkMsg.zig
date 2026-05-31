@@ -18,26 +18,26 @@ dest_chunk: sync.DestChunk,
 pld_chunk: sync.PayloadChunk,
 
 pub fn init(buf: []u8) InitError!TransmitFileMsg {
-    var tfm: TransmitFileMsg = .{
+    var tcm: TransmitFileMsg = .{
         .msg_container = .{ .msg_buf = buf },
         .rq_chunk = undefined,
         .dest_chunk = undefined,
         .pld_chunk = undefined,
     };
 
-    var data_buf = tfm.msg_container.dataBuf();
-    tfm.rq_chunk = try sync.Chunk.createChunk(sync.RequestChunk, data_buf);
+    var data_buf = tcm.msg_container.dataBuf();
+    tcm.rq_chunk = try sync.Chunk.createChunk(sync.RequestChunk, data_buf);
     data_buf = data_buf[sync.header.header_size + sync.RequestChunk.content_size ..];
 
-    tfm.dest_chunk = try sync.Chunk.createChunk(sync.DestChunk, data_buf);
+    tcm.dest_chunk = try sync.Chunk.createChunk(sync.DestChunk, data_buf);
     data_buf = data_buf[sync.header.header_size + sync.DestChunk.content_size ..];
 
-    tfm.pld_chunk = try sync.Chunk.createChunk(sync.PayloadChunk, data_buf);
+    tcm.pld_chunk = try sync.Chunk.createChunk(sync.PayloadChunk, data_buf);
 
-    tfm.msg_container.resetSizeHeader();
-    tfm.msg_container.updateHeader() catch unreachable;
+    tcm.msg_container.resetSizeHeader();
+    tcm.msg_container.updateHeader() catch unreachable;
 
-    return tfm;
+    return tcm;
 }
 
 pub fn newMsg(self: *TransmitFileMsg, payload_size: u32, req_type: sync.RequestChunk.RequestType, id: sync.RequestChunk.IdT) NewMsgError![]u8 {
@@ -46,7 +46,7 @@ pub fn newMsg(self: *TransmitFileMsg, payload_size: u32, req_type: sync.RequestC
 
     self.rq_chunk.id = id;
     self.rq_chunk.request_type = switch (req_type) {
-        .file_push, .file_new => req_type,
+        .chunk_update, .chunk_new => req_type,
         else => return NewMsgError.UnsupportedRequestType,
     };
     self.rq_chunk.resp_code = .resp_no_error;
@@ -72,7 +72,7 @@ test "newMsg payload size matches" {
     var buf: [TransmitFileMsg.non_payload_size + payload_size + 1024]u8 = undefined;
 
     var tfm: TransmitFileMsg = try .init(&buf);
-    const pld_buf = try tfm.newMsg(payload_size, .file_push, 0);
+    const pld_buf = try tfm.newMsg(payload_size, .chunk_update, 0);
     try std.testing.expectEqual(payload_size, pld_buf.len);
     try std.testing.expectEqual(payload_size + TransmitFileMsg.non_payload_size, try tfm.msg_container.getMsgSize());
 }

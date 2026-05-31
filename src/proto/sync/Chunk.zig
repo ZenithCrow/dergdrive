@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const BreakChunk = @import("BreakChunk.zig");
 const DestChunk = @import("DestChunk.zig");
 const header = @import("header.zig");
 const PayloadChunk = @import("PayloadChunk.zig");
@@ -13,7 +14,10 @@ pub const Iterator = struct {
     pub fn next(self: *Iterator) ReadError!?Chunk {
         if (self.index >= self.buffer.len) return null;
 
-        const chunk = try readChunk(self.buffer[self.index..]);
+        const chunk = readChunk(self.buffer[self.index..]) catch |err| return switch (err) {
+            ReadError.IsBreakChunk => null,
+            else => err,
+        };
         self.index += chunk.getWrittenSize();
 
         return chunk;
@@ -25,19 +29,25 @@ pub const ChunkType = enum {
     request,
     destination,
     payload,
+    @"break",
+
+    pub const Error = error{
+        UnknownChunkType,
+    };
 
     const PackedStrT = @Int(.unsigned, 8 * header.header_title_size);
     fn packedString(title: [header.header_title_size]u8) PackedStrT {
         return std.mem.readInt(PackedStrT, &title, .little);
     }
 
-    pub fn fromHeaderTitle(title: [header.header_title_size]u8) ?ChunkType {
+    pub fn fromHeaderTitle(title: [header.header_title_size]u8) Error!ChunkType {
         return switch (packedString(title)) {
             packedString(SyncMessage.header_title.*) => .sync_message,
             packedString(RequestChunk.header_title.*) => .request,
             packedString(DestChunk.header_title.*) => .destination,
             packedString(PayloadChunk.header_title.*) => .payload,
-            else => null,
+            packedString(BreakChunk.header_title.*) => .@"break",
+            else => Error.UnknownChunkType,
         };
     }
 };
@@ -46,9 +56,9 @@ const Chunk = @This();
 
 pub const ReadError = error{
     InvalidHeader,
-    UnknownChunkType,
     DataLenMismatch,
-};
+    IsBreakChunk,
+} || ChunkType.Error;
 
 pub const CreateError = error{
     InsufficientBufferSpace,
@@ -64,7 +74,7 @@ pub inline fn getWrittenSize(self: Chunk) header.DataLenT {
 }
 
 pub inline fn updateSizeHeader(self: Chunk) void {
-    std.mem.writeInt(header.DataLenT, self.header_buf[header.header_title_size..header.header_size], self.data.len, .little);
+    std.mem.writeInt(header.DataLenT, self.header_buf[header.header_title_size..header.header_size], @truncate(self.data.len), .little);
 }
 
 pub fn readChunk(buffer: []u8) ReadError!Chunk {
@@ -78,22 +88,27 @@ pub fn readChunk(buffer: []u8) ReadError!Chunk {
     return .{
         .header_buf = buffer[0..header.header_size],
         .data = buffer[header.header_size .. header.header_size + size],
-        .chunk_type = ChunkType.fromHeaderTitle(buffer[0..header.header_title_size].*) orelse return ReadError.UnknownChunkType,
+        .chunk_type = switch (try ChunkType.fromHeaderTitle(buffer[0..header.header_title_size].*)) {
+            .@"break" => return ReadError.IsBreakChunk,
+            else => |chunk| chunk,
+        },
     };
 }
 
 pub fn createChunk(comptime ChunkT: type, buf: []u8) CreateError!ChunkT {
-    //  TODO: validation of ChunkT
-
-    // switch (@typeInfo(ChunkT)) {
-    //     .@"struct" => |struc| {
-    //         if (!(for (struc.decls) |decl| {
-    //             if (std.mem.eql(u8, decl.name, "content_size"))
-    //                 break true;
-    //         } else false)) @compileError("struct " ++ @typeName(ChunkT) ++ " is missing content_size declaration");
-    //     },
-    //     else => @compileError("ChunkT must be a struct type"),
-    // }
+    comptime switch (@typeInfo(ChunkT)) {
+        .@"struct" => |struc| {
+            for (struc.decls) |decl| {
+                if (std.mem.eql(u8, decl.name, "content_size"))
+                    break;
+            } else @compileError("struct " ++ @typeName(ChunkT) ++ " is missing content_size declaration");
+            for (struc.decls) |decl| {
+                if (std.mem.eql(u8, decl.name, "header_title"))
+                    break;
+            } else @compileError("struct " ++ @typeName(ChunkT) ++ " is missing header_title declaration");
+        },
+        else => @compileError("ChunkT must be a struct type"),
+    };
 
     const chunk_buf_size = header.header_size + ChunkT.content_size;
     if (buf.len < chunk_buf_size)
@@ -103,7 +118,7 @@ pub fn createChunk(comptime ChunkT: type, buf: []u8) CreateError!ChunkT {
     var chunk: Chunk = .{
         .header_buf = chunk_buf[0..header.header_size],
         .data = chunk_buf[header.header_size..],
-        .chunk_type = ChunkType.fromHeaderTitle(ChunkT.header_title.*) orelse unreachable,
+        .chunk_type = ChunkType.fromHeaderTitle(ChunkT.header_title.*) catch unreachable,
     };
 
     std.mem.copyForwards(u8, chunk.header_buf[0..header.header_title_size], ChunkT.header_title);

@@ -36,13 +36,14 @@ fn testPipe(args: []const []const u8, emap: *const std.process.Environ.Map, allo
     var raw_pa: pipe_adapter.RawFilePipeAdapter = .init;
     var req_pa: pipe_adapter.RequestPipeAdapter = .init;
 
+    var req_sender: RequestSender = try .init(&req_stor, &req_pa, allocator);
+    defer req_sender.deinit(allocator);
+
     var file_reader: FileReader = .{
         .raw_file_adapter = &raw_pa,
         .req_stor = &req_stor,
+        .prio_req = &req_sender.prio_request,
     };
-
-    var req_sender: RequestSender = try .init(&req_stor, &req_pa, allocator);
-    defer req_sender.deinit(allocator);
 
     var crypt_cluster: Cryptor.Cluster = .init("klicklicklicklicklicklicklicklic".*, &req_stor, 4);
 
@@ -61,7 +62,7 @@ fn testPipe(args: []const []const u8, emap: *const std.process.Environ.Map, allo
     const file = try std.Io.Dir.cwd().openFile(io, file_path, .{});
     defer file.close(io);
 
-    const pipe_info: FileReader.PipeInfo = .{ .file_new = .{ .path = file_path } };
+    const pipe_info: FileReader.PipeInfo = .{ .path = file_path, .dests = &.{} };
     try file_reader.pipeFile(file, pipe_info, allocator, io);
 
     try req_stor.reqs_complete_lock.lock(io);

@@ -2,10 +2,10 @@ const std = @import("std");
 const Thread = std.Thread;
 
 const sync = @import("dergdrive").proto.sync;
-//const TcpClient = @import("znetw").TcpClient;
 
 const Cryptor = @import("Cryptor.zig");
 const pipe_adapter = @import("pipe_adapter.zig");
+const PrioRequest = @import("PrioRequest.zig");
 const RequestChunkBuffer = @import("RequestChunkBuffer.zig");
 const RequestStorage = @import("RequestStorage.zig");
 
@@ -16,19 +16,21 @@ const RequestSender = @This();
 //tcp_cli: *TcpClient,
 req_stor: *RequestStorage,
 enc_file_reqs: *pipe_adapter.RequestPipeAdapter,
-prio_request: RequestChunkBuffer,
+prio_request: PrioRequest,
 send_task: ?std.Io.Future(std.Io.Cancelable!void) = null,
 
 pub fn init(req_stor: *RequestStorage, enc_file_reqs: *pipe_adapter.RequestPipeAdapter, allocator: std.mem.Allocator) std.mem.Allocator.Error!RequestSender {
     return .{
         .req_stor = req_stor,
         .enc_file_reqs = enc_file_reqs,
-        .prio_request = try .init(allocator),
+        .prio_request = .{
+            .request_buf = try .init(allocator),
+        },
     };
 }
 
 pub fn deinit(self: *RequestSender, allocator: std.mem.Allocator) void {
-    self.prio_request.deinit(allocator);
+    self.prio_request.request_buf.deinit(allocator);
     self.send_task = null;
 }
 
@@ -51,7 +53,7 @@ fn getReqBuf(self: *RequestSender, idx: u8) GetReqBufError!*RequestChunkBuffer {
     if (idx < num_cryptors) {
         return &self.enc_file_reqs.cryptors[idx].request_cbuf;
     } else if (idx == num_cryptors) {
-        return &self.prio_request;
+        return &self.prio_request.request_buf;
     } else return GetReqBufError.InvalidIndex;
 }
 
@@ -86,8 +88,9 @@ fn readBuf(self: *RequestSender, io: std.Io) std.Io.Cancelable![]u8 {
         self.enc_file_reqs.avail_idx = pipe_adapter.RequestPipeAdapter.invalid_index;
     }
 
-    for (0..self.enc_file_reqs.cryptors.len + 2) |i| {
-        const idx: u8 = if (i == self.enc_file_reqs.cryptors.len + 1) try self.waitUntilAvailable(io) else @truncate(i);
+    var i: isize = @bitCast(self.enc_file_reqs.cryptors.len + 1);
+    while (i >= 0) : (i -= 1) {
+        const idx: u8 = if (@as(usize, @bitCast(i)) == self.enc_file_reqs.cryptors.len + 1) try self.waitUntilAvailable(io) else @truncate(@as(usize, @bitCast(i)));
         const req_buf_res = self.getReqBuf(idx) catch unreachable;
 
         try req_buf_res.chunk_buf.w_lock.lock(io);
@@ -113,8 +116,8 @@ fn finishReadBuf(self: *RequestSender, used_buf: []u8, io: std.Io) void {
         }
     }
 
-    if (used_buf.ptr == self.prio_request.chunk_buf.buf.ptr)
-        self.prio_request.chunk_buf.setStateAndSignal(.empty, io) catch unreachable;
+    if (used_buf.ptr == self.prio_request.request_buf.chunk_buf.buf.ptr)
+        self.prio_request.request_buf.chunk_buf.setStateAndSignal(.empty, io) catch unreachable;
 }
 
 fn sendLoop(self: *RequestSender, io: std.Io) std.Io.Cancelable!void {

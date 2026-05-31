@@ -23,17 +23,17 @@ pub fn getWrittenBufProtected(self: *ChunkBuffer, io: std.Io) std.Io.Cancelable!
 }
 
 pub fn setBufEmptyProtected(self: *ChunkBuffer, io: std.Io) std.Io.Cancelable!void {
-    self.w_lock.lock(io) catch unreachable;
+    try self.w_lock.lock(io);
     defer self.w_lock.unlock(io);
 
     self.setState(.empty);
 }
 
-pub fn waitUntilState(self: *ChunkBuffer, empty: FillState, io: std.Io) std.Io.Cancelable!void {
+pub fn waitUntilState(self: *ChunkBuffer, fill_state: FillState, io: std.Io) std.Io.Cancelable!void {
     try self.w_lock.lock(io);
     defer self.w_lock.unlock(io);
 
-    while (self.fill_state != empty)
+    while (self.fill_state != fill_state)
         try self.state_cond.wait(io, &self.w_lock);
 }
 

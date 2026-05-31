@@ -1,6 +1,7 @@
 const std = @import("std");
-const header = @import("header.zig");
+
 const Chunk = @import("Chunk.zig");
+const header = @import("header.zig");
 const RequestChunk = @import("RequestChunk.zig");
 
 const SyncMessage = @This();
@@ -19,7 +20,7 @@ pub fn dataBuf(self: SyncMessage) []u8 {
     return self.msg_buf[header.header_size..];
 }
 
-/// the total size of data in the message excluding the size header
+/// compute the total size of data in the message excluding the size header
 pub fn dataSize(self: SyncMessage) Chunk.ReadError!header.DataLenT {
     var chunk_iter = try iterFromBuf(self.msg_buf);
     var total_size: header.DataLenT = 0;
@@ -31,7 +32,7 @@ pub fn dataSize(self: SyncMessage) Chunk.ReadError!header.DataLenT {
     return total_size;
 }
 
-/// the total size of the message including header and data
+/// compute the total size of the message including header and data
 pub inline fn getMsgSize(self: SyncMessage) Chunk.ReadError!header.DataLenT {
     return header.header_size + try self.dataSize();
 }
@@ -50,7 +51,7 @@ pub inline fn updateSizeHeader(self: SyncMessage) Chunk.ReadError!void {
 }
 
 pub inline fn resetSizeHeader(self: SyncMessage) void {
-    self.writeSize(self.msg_buf.len - header.header_size);
+    self.writeSize(@as(header.DataLenT, @truncate(self.msg_buf.len)) - header.header_size);
 }
 
 pub fn updateHeader(self: SyncMessage) Chunk.ReadError!void {

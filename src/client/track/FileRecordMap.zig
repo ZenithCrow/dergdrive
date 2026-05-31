@@ -37,18 +37,26 @@ pub const FileRecord = struct {
 
 pub const FileRecordOptions = packed struct(u8) {
     deleted: bool,
-    reserved: u7 = undefined,
+    _: u7 = undefined,
 };
 
 pub const FileChunk = struct {
-    blk_id: [dergdrive.crypt.NameHashAlgo.digest_length]u8,
+    blk_id: u64,
     blk_offset: u32,
-    length: u32,
+    encoded_len: u32,
+    local_fi: LocalFileInfo,
+
+    pub const LocalFileInfo = struct {
+        file_offset: u64,
+        real_len: u32,
+    };
 
     pub fn format(self: FileChunk, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        try writer.writeAll(&self.blk_id);
+        try writer.writeInt(u64, self.blk_id, .little);
         try writer.writeInt(u32, self.blk_offset, .little);
-        try writer.writeInt(u32, self.length, .little);
+        try writer.writeInt(u32, self.encoded_len, .little);
+        try writer.writeInt(u64, self.local_fi.file_offset, .little);
+        try writer.writeInt(u32, self.local_fi.real_len, .little);
     }
 };
 
@@ -223,9 +231,13 @@ test "get dir from file records" {
     defer frmap.deinit();
 
     const generic_chunk: FileRecordMap.FileChunk = .{
-        .blk_id = "blemblem".*,
+        .blk_id = 0,
         .blk_offset = 0,
-        .length = 1,
+        .encoded_len = 1,
+        .local_fi = .{
+            .file_offset = 0,
+            .real_len = 1,
+        },
     };
 
     const generic_file_record: FileRecordMap.FileRecord = .{
