@@ -4,6 +4,7 @@ const dergdrive = @import("dergdrive");
 const sync = dergdrive.proto.sync;
 const MultipleDestsChunkMsg = sync.templates.MultipleDestChunksMsg;
 const TransactionAbortMsg = sync.templates.TransactionAbortMsg;
+const UnitAbortMsg = sync.templates.UnitAbortMsg;
 const FileRecordMap = dergdrive.client.track.FileRecordMap;
 const RequestChunk = sync.RequestChunk;
 
@@ -33,11 +34,15 @@ fn createReq(self: *PrioRequest, io: std.Io, init_fn: anytype, args_wo_buf: anyt
     try self.request_buf.chunk_buf.setStateAndSignal(.full, io);
 }
 
-pub fn createChunksDelReq(self: *PrioRequest, query: []const FileRecordMap.FileChunk, id: RequestChunk.IdT, io: std.Io) CreateReqError!void {
+pub fn chunksDelReq(self: *PrioRequest, query: []const FileRecordMap.FileChunk, id: RequestChunk.IdT, io: std.Io) CreateReqError!void {
     try self.createReq(io, MultipleDestsChunkMsg.init, .{ query, RequestChunk.RequestType.chunks_del, id });
 }
 
-pub fn createTransAbortReq(self: *PrioRequest, id: RequestChunk.IdT, io: std.Io) CreateReqError!void {
+pub fn unitAbortReq(self: *PrioRequest, req_ids: []const RequestChunk.IdT, id: RequestChunk.IdT, io: std.Io) CreateReqError!void {
+    try self.createReq(io, UnitAbortMsg.init, .{ req_ids, id });
+}
+
+pub fn transAbortReq(self: *PrioRequest, id: RequestChunk.IdT, io: std.Io) CreateReqError!void {
     const old_p = io.swapCancelProtection(.blocked);
     defer _ = io.swapCancelProtection(old_p);
 

@@ -123,7 +123,16 @@ fn createChunkReq(
     }
 }
 
-pub fn createChunkNewReq(
+pub fn removeRequest(self: *RequestStorage, id: RequestChunk.IdT, io: std.Io) ?Request {
+    self.lock.lockUncancelable(io);
+    defer self.lock.unlock(io);
+
+    const req = self.reqs.get(id);
+    _ = self.reqs.swapRemove(id);
+    return req;
+}
+
+pub fn chunkNewReq(
     self: *RequestStorage,
     path: []const u8,
     local_fi: FileRecordMap.FileChunk.LocalFileInfo,
@@ -136,7 +145,7 @@ pub fn createChunkNewReq(
     } }, gpa, io);
 }
 
-pub fn createChunkUpdateReq(
+pub fn chunkUpdateReq(
     self: *RequestStorage,
     path: []const u8,
     dest: sync.DestChunk.Query,
@@ -151,7 +160,7 @@ pub fn createChunkUpdateReq(
     } }, gpa, io);
 }
 
-pub fn createChunksDelReq(
+pub fn chunksDelReq(
     self: *RequestStorage,
     path: []const u8,
     del_dests: []const FileRecordMap.FileChunk,
@@ -166,7 +175,12 @@ pub fn createChunksDelReq(
     } }, gpa, io);
 }
 
-pub fn gatherFileReqsIds(self: *RequestStorage, path: []const u8, gpa: std.mem.Allocator, io: std.Io) std.mem.Allocator.Error![]const RequestChunk.IdT {
+pub fn gatherFileReqIds(
+    self: *RequestStorage,
+    path: []const u8,
+    gpa: std.mem.Allocator,
+    io: std.Io,
+) std.mem.Allocator.Error![]const RequestChunk.IdT {
     var id_list: std.ArrayList(RequestChunk.IdT) = .empty;
 
     self.lock.lockUncancelable(io);
@@ -183,4 +197,25 @@ pub fn gatherFileReqsIds(self: *RequestStorage, path: []const u8, gpa: std.mem.A
     }
 
     return id_list.items;
+}
+
+pub fn unitAbortReq(
+    self: *RequestStorage,
+    req_ids: []const RequestChunk.IdT,
+    gpa: std.mem.Allocator,
+    io: std.Io,
+) std.mem.Allocator.Error!RequestChunk.IdT {
+    const req_id = self.id_supply.takeId(io);
+
+    self.lock.lockUncancelable(io);
+    defer self.lock.unlock(io);
+
+    try self.reqs.putNoClobber(gpa, req_id, .{
+        .id = req_id,
+        .query = .{ .unit_abort = .{
+            .file_req_ids = req_ids,
+        } },
+    });
+
+    return req_id;
 }

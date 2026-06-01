@@ -49,6 +49,7 @@ pub const proto = struct {
         pub const DestChunk = @import("proto/sync/DestChunk.zig");
         pub const PayloadChunk = @import("proto/sync/PayloadChunk.zig");
         pub const templates = struct {
+            pub const UnitAbortMsg = @import("proto/sync/templates/UnitAbortMsg.zig");
             pub const TransmitChunkMsg = @import("proto/sync/templates/TransmitChunkMsg.zig");
             pub const MultipleDestChunksMsg = @import("proto/sync/templates/MultipleDestChunksMsg.zig");
             pub const TransactionAbortMsg = @import("proto/sync/templates/TransactionAbortMsg.zig");

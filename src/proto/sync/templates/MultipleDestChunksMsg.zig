@@ -11,14 +11,14 @@ const MultipleDestChunksMsg = @This();
 msg_container: sync.SyncMessage,
 
 pub fn init(buf: []u8, query: []const FileRecordMap.FileChunk, req_type: sync.RequestChunk.RequestType, id: sync.RequestChunk.IdT) Error!MultipleDestChunksMsg {
-    var sync_msg: sync.SyncMessage = .{ .msg_buf = buf };
+    const sync_msg: sync.SyncMessage = .{ .msg_buf = buf };
     var data_buf = sync_msg.dataBuf();
 
     var rq_chunk = try sync.Chunk.createChunk(sync.RequestChunk, data_buf);
     rq_chunk.id = id;
     rq_chunk.request_type = switch (req_type) {
         .chunks_del, .chunks_fetch => req_type,
-        else => return Error.InsufficientBufferSpace,
+        else => return Error.UnsupportedRequestType,
     };
     rq_chunk.resp_code = .resp_no_error;
     rq_chunk.write();

@@ -58,3 +58,16 @@ pub fn updateHeader(self: SyncMessage) Chunk.ReadError!void {
     std.mem.copyForwards(u8, self.msg_buf[0..header.header_title_size], header_title);
     try self.updateSizeHeader();
 }
+
+/// initializes the message and creates a request chunk, returning rest of the msg buffer
+pub fn initRequest(self: SyncMessage, req_type: RequestChunk.RequestType, id: RequestChunk.IdT) Chunk.CreateError![]u8 {
+    const data_buf = self.dataBuf();
+
+    var rq_chunk = try Chunk.createChunk(RequestChunk, data_buf);
+    rq_chunk.id = id;
+    rq_chunk.request_type = req_type;
+    rq_chunk.resp_code = .resp_no_error;
+    rq_chunk.write();
+
+    return data_buf[header.header_size + RequestChunk.content_size ..];
+}

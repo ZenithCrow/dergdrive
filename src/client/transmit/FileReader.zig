@@ -17,7 +17,7 @@ raw_file_adapter: *pipe_adapter.RawFilePipeAdapter,
 req_stor: *RequestStorage,
 prio_req: *PrioRequest,
 
-pub const PipeFileError = File.LengthError || File.Reader.Error || std.mem.Allocator.Error || PrioRequest.CreateReqError;
+pub const PipeFileError = error{UnitAbortFailed} || File.LengthError || File.Reader.Error || std.mem.Allocator.Error || PrioRequest.CreateReqError;
 
 const log = std.log.scoped(.@"client/transmit/FileReader");
 
@@ -31,7 +31,24 @@ pub const PipeInfo = struct {
 };
 
 pub fn pipeFile(self: *FileReader, file: File, pipe_info: PipeInfo, gpa: std.mem.Allocator, io: std.Io) PipeFileError!void {
-    //  TODO: do the errdefer here normally
+    self.pipeFileErrorNowrap(file, pipe_info, gpa, io) catch |err| {
+        log.warn("Transaction of file \"{s}\" wasn't successful due to error: {t}.", .{ pipe_info.path, err });
+
+        switch (err) {
+            PipeFileError.OutOfMemory, PipeFileError.UnitAbortFailed => return err,
+            else => {
+                log.warn("Sending a cancel upload request for file \"{s}\"", .{pipe_info.path});
+
+                const file_req_ids = self.req_stor.gatherFileReqIds(pipe_info.path, gpa, io) catch return PipeFileError.UnitAbortFailed;
+                errdefer gpa.free(file_req_ids);
+
+                const req_id = self.req_stor.unitAbortReq(file_req_ids, gpa, io) catch return PipeFileError.UnitAbortFailed;
+                errdefer _ = self.req_stor.removeRequest(req_id, io);
+
+                self.prio_req.unitAbortReq(file_req_ids, req_id, io) catch return PipeFileError.UnitAbortFailed;
+            },
+        }
+    };
 }
 
 fn pipeFileErrorNowrap(self: *FileReader, file: File, pipe_info: PipeInfo, gpa: std.mem.Allocator, io: std.Io) PipeFileError!void {
@@ -40,21 +57,6 @@ fn pipeFileErrorNowrap(self: *FileReader, file: File, pipe_info: PipeInfo, gpa: 
     var reader = file.reader(io, &.{});
 
     var idx_sent: usize = 0;
-
-    // errdefer a cancel upload request for this file, so that partial uploads do not occur
-    errdefer {
-        log.warn("Transaction of file \"{s}\" wasn't successful. Sending a cancel upload request for this file.", .{pipe_info.path});
-        const ids_res = self.req_stor.gatherFileReqsIds(pipe_info.path, gpa, io);
-
-        //  TODO: unit abort request
-
-        if (ids_res) |ids| {
-            _ = ids;
-        } else |err| {
-            log.err("Critical failure due to error: {t}. Aborting the whole transaction.", .{err});
-            self.prio_req.createTransAbortReq(sync.RequestChunk.IdSupplier(.client).reserved_failure_id, io) catch unreachable;
-        }
-    }
 
     while (piped_size < file_size) : (idx_sent += 1) {
         {
@@ -96,7 +98,7 @@ fn pipeFileErrorNowrap(self: *FileReader, file: File, pipe_info: PipeInfo, gpa: 
 
         // create file_new requests if run out of existing file chunks
         rf_chunk_buf.req_id = if (pipe_info.dests.len == 0 or idx_sent > pipe_info.dests.len - 1)
-            try self.req_stor.createChunkNewReq(pipe_info.path, local_fi, gpa, io)
+            try self.req_stor.chunkNewReq(pipe_info.path, local_fi, gpa, io)
         else blk: {
             const file_chunk = &pipe_info.dests[idx_sent];
             const dest: sync.DestChunk.Query = .{
@@ -104,7 +106,7 @@ fn pipeFileErrorNowrap(self: *FileReader, file: File, pipe_info: PipeInfo, gpa: 
                 .prev_len = file_chunk.encoded_len,
                 .blk_id = file_chunk.blk_id,
             };
-            break :blk try self.req_stor.createChunkUpdateReq(pipe_info.path, dest, local_fi, gpa, io);
+            break :blk try self.req_stor.chunkUpdateReq(pipe_info.path, dest, local_fi, gpa, io);
         };
 
         piped_size += bytes_read;
@@ -112,7 +114,7 @@ fn pipeFileErrorNowrap(self: *FileReader, file: File, pipe_info: PipeInfo, gpa: 
 
     // truncate unused file chunks
     if (idx_sent < pipe_info.dests.len) {
-        const req_id = try self.req_stor.createChunksDelReq(pipe_info.path, pipe_info.dests, idx_sent, gpa, io);
-        try self.prio_req.createChunksDelReq(pipe_info.dests, req_id, io);
+        const req_id = try self.req_stor.chunksDelReq(pipe_info.path, pipe_info.dests, idx_sent, gpa, io);
+        try self.prio_req.chunksDelReq(pipe_info.dests, req_id, io);
     }
 }
