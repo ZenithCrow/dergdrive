@@ -11,15 +11,7 @@ msg_container: sync.SyncMessage,
 
 pub fn init(buf: []u8, id: sync.RequestChunk.IdT) Error!TransactionAbortMsg {
     var sync_msg: sync.SyncMessage = .{ .msg_buf = buf };
-    var data_buf = sync_msg.dataBuf();
-
-    var rq_chunk = try sync.Chunk.createChunk(sync.RequestChunk, data_buf);
-    rq_chunk.id = id;
-    rq_chunk.request_type = .trans_abort;
-    rq_chunk.resp_code = .resp_no_error;
-    rq_chunk.write();
-
-    data_buf = data_buf[sync.header.header_size + sync.RequestChunk.content_size ..];
+    const data_buf = try sync_msg.initRequest(.trans_abort, id);
     _ = sync.Chunk.createChunk(sync.BreakChunk, data_buf) catch {};
 
     sync_msg.resetSizeHeader();
