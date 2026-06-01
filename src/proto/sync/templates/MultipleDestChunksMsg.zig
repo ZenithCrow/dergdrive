@@ -17,8 +17,6 @@ pub fn init(buf: []u8, query: []const FileRecordMap.FileChunk, req_type: sync.Re
         else => return Error.UnsupportedRequestType,
     }, id);
 
-    data_buf = data_buf[sync.header.header_size + sync.RequestChunk.content_size ..];
-
     for (query) |f| {
         var dest_chunk = try sync.Chunk.createChunk(sync.DestChunk, data_buf);
         const q: sync.DestChunk.Query = .{
