@@ -19,19 +19,12 @@ const ConfFileContext = struct {
     conf: Conf,
 
     pub fn hash(self: ConfFileContext, c: Conf.ConfFile) u32 {
-        var key = c.getFullPath(self.conf, self.allocator) catch return 0;
+        const key = c.getFullPath(self.conf, self.allocator) catch return 0;
         defer self.allocator.free(key);
 
-        var h: std.hash.Fnv1a_32 = .init();
-
-        while (key.len >= 64) : (key = key[64..]) {
-            h.update(key[0..64]);
-        }
-
-        if (key.len > 0)
-            h.update(key);
-
-        return h.final();
+        var h: std.hash.Wyhash = .init(0);
+        h.update(key);
+        return @truncate(h.final());
     }
 
     pub fn eql(self: ConfFileContext, x: Conf.ConfFile, y: Conf.ConfFile, _: usize) bool {
@@ -198,10 +191,10 @@ test "env config" {
     const pfix: Conf.ConfPrefix = .{
         .config_global_linux = ".test/global",
         .config_internal = ".test/internal",
-        .config_local_linux = ".test/local",
-        .config_secret_linux = ".test/secret",
-        .config_vol_local_linux = ".test/{vol}",
-        .config_vol_secret_linux = ".test/{vol}/secret",
+        .config_user_linux = ".test/local",
+        .pers_user_secret_linux = ".test/secret",
+        .config_vol_linux = ".test/{vol}",
+        .pers_vol_secret_linux = ".test/{vol}/secret",
     };
 
     for (hierarchy) |*cf| {
@@ -226,7 +219,7 @@ test "env config" {
         try env.set("owo", "uwu", .{ .nspace = .{ .nspace = .{ .config = .global }, .pfix = pfix }, .sub_path = "cowonfig.env" });
         try std.testing.expectEqualStrings("uwu", env.get("owo").?);
 
-        try env.set("yay", weird_value, .{ .nspace = .{ .nspace = .{ .config = .local }, .pfix = pfix }, .sub_path = "config.ini" });
+        try env.set("yay", weird_value, .{ .nspace = .{ .nspace = .{ .config = .user }, .pfix = pfix }, .sub_path = "config.ini" });
         try std.testing.expectEqualStrings(weird_value, env.get("yay").?);
 
         try env.set("override me", "overridden", null);

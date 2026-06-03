@@ -13,21 +13,22 @@ pub const WriteConfFileError = OpenOrCreateConfFileError || std.Io.File.WritePos
 pub const GetConfError = GetFileContentError || GetFileContentFromPathError || OpenOrCreateConfFileError;
 pub const SetError = GetFileContentError || OpenOrCreateConfFileError || std.Io.File.SeekError || std.Io.File.SetLengthError || std.Io.File.Writer.Error;
 
-const pers_internal: []const u8 = "./share";
-const cache_internal: []const u8 = "./cache";
-const config_internal: []const u8 = "./config";
+const pers_internal: []const u8 = ".share";
+const cache_internal: []const u8 = ".cache";
+const config_internal: []const u8 = ".config";
 
 const config_global_linux: []const u8 = "/etc/" ++ proj_name;
-const config_local_linux: []const u8 = "~/.config/" ++ proj_name;
-const config_vol_local_linux: []const u8 = config_local_linux ++ "/{vol}";
-const config_secret_linux: []const u8 = config_local_linux ++ "/secret";
-const config_vol_secret_linux: []const u8 = config_vol_local_linux ++ "/secret";
-const cache_global_linux: []const u8 = "/var/cache/" ++ proj_name;
-const cache_local_linux: []const u8 = "~/.cache/" ++ proj_name;
-const cache_vol_local_linux: []const u8 = cache_local_linux ++ "/{vol}";
+const config_user_linux: []const u8 = "$XDG_CONFIG_HOME/" ++ proj_name;
+const config_user_linux_xdg_resort: []const u8 = "~/.config";
+const config_vol_linux: []const u8 = config_user_linux ++ "/{vol}";
+const cache_user_linux: []const u8 = "~/.cache/" ++ proj_name;
+const cache_vol_local_linux: []const u8 = cache_user_linux ++ "/{vol}";
 const pers_global_linux: []const u8 = "/usr/share/" ++ proj_name;
-const pers_local_linux: []const u8 = "~/.local/share/" ++ proj_name;
-const pers_vol_local_linux: []const u8 = pers_local_linux ++ "/{vol}";
+const pers_user_linux: []const u8 = "$XDG_DATA_HOME/" ++ proj_name;
+const pers_user_linux_xdg_resort: []const u8 = "~/.local/share";
+const pers_user_secret_linux: []const u8 = pers_user_linux ++ "/secret";
+const pers_vol_linux: []const u8 = pers_user_linux ++ "/{vol}";
+const pers_vol_secret_linux: []const u8 = pers_vol_linux ++ "/secret";
 
 const config_global_windows: []const u8 = pers_global_windows ++ "\\config";
 const config_local_windows: []const u8 = pers_local_windows ++ "\\config";
@@ -43,25 +44,24 @@ const pers_vol_local_windows: []const u8 = pers_local_windows ++ "\\{vol}";
 
 pub const ConfPrefix = struct {
     config_global_linux: []const u8 = config_global_linux,
-    config_local_linux: []const u8 = config_local_linux,
-    config_vol_local_linux: []const u8 = config_vol_local_linux,
-    config_secret_linux: []const u8 = config_secret_linux,
-    config_vol_secret_linux: []const u8 = config_vol_secret_linux,
+    config_user_linux: []const u8 = config_user_linux,
+    config_vol_linux: []const u8 = config_vol_linux,
     config_internal: []const u8 = config_internal,
-    cache_global_linux: []const u8 = cache_global_linux,
-    cache_local_linux: []const u8 = cache_local_linux,
-    cache_vol_local_linux: []const u8 = cache_vol_local_linux,
+    cache_user_linux: []const u8 = cache_user_linux,
+    cache_vol_linux: []const u8 = cache_vol_local_linux,
     cache_internal: []const u8 = cache_internal,
     pers_global_linux: []const u8 = pers_global_linux,
-    pers_local_linux: []const u8 = pers_local_linux,
-    pers_vol_local_linux: []const u8 = pers_vol_local_linux,
+    pers_user_linux: []const u8 = pers_user_linux,
+    pers_user_secret_linux: []const u8 = pers_user_secret_linux,
+    pers_vol_local_linux: []const u8 = pers_vol_linux,
+    pers_vol_secret_linux: []const u8 = pers_vol_secret_linux,
     pers_internal: []const u8 = pers_internal,
 };
 
 pub const Nspace = enum {
     global,
-    local,
-    vol_local,
+    user,
+    vol,
     internal,
     secret,
     vol_secret,
@@ -86,25 +86,24 @@ pub const PfixNspace = struct {
             .linux => switch (self.nspace) {
                 .config => |nspace| switch (nspace) {
                     .global => self.pfix.config_global_linux,
-                    .local => self.pfix.config_local_linux,
-                    .vol_local => self.pfix.config_vol_local_linux,
+                    .user => self.pfix.config_user_linux,
+                    .vol => self.pfix.config_vol_linux,
                     .internal => self.pfix.config_internal,
-                    .secret => self.pfix.config_secret_linux,
-                    .vol_secret => self.pfix.config_vol_secret_linux,
+                    else => @panic("namespace not supported for config storage"),
                 },
                 .cache => |nspace| switch (nspace) {
-                    .global => self.pfix.cache_global_linux,
-                    .local => self.pfix.cache_local_linux,
-                    .vol_local => self.pfix.cache_vol_local_linux,
+                    .user => self.pfix.cache_user_linux,
+                    .vol => self.pfix.cache_vol_linux,
                     .internal => self.pfix.cache_internal,
                     else => @panic("namespace not supported for cache"),
                 },
                 .pers => |nspace| switch (nspace) {
                     .global => self.pfix.pers_global_linux,
-                    .local => self.pfix.pers_local_linux,
-                    .vol_local => self.pfix.pers_vol_local_linux,
+                    .user => self.pfix.pers_user_linux,
+                    .vol => self.pfix.pers_vol_local_linux,
                     .internal => self.pfix.pers_internal,
-                    else => @panic("namespace not supported for persistent storage"),
+                    .secret => self.pfix.pers_user_secret_linux,
+                    .vol_secret => self.pfix.pers_vol_secret_linux,
                 },
             },
             else => @compileError("implement this for your os if you want it so bad"),
@@ -162,19 +161,19 @@ pub const KeyValueIterator = struct {
 };
 
 const config_filename = "config.ini";
-const g_conf_file_default: ConfFile = .{ .nspace = .from(.{ .config = .local }), .sub_path = config_filename, .always_create = true };
+const g_conf_file_default: ConfFile = .{ .nspace = .from(.{ .config = .user }), .sub_path = config_filename, .always_create = true };
 const g_conf_file_hierarchy: []const ConfFile = switch (builtin.os.tag) {
     .linux => &.{
         .{ .nspace = .from(.{ .config = .internal }), .sub_path = config_filename, .always_create = false },
         .{ .nspace = .from(.{ .config = .global }), .sub_path = config_filename, .always_create = false },
         g_conf_file_default,
-        .{ .nspace = .from(.{ .config = .vol_local }), .sub_path = config_filename, .always_create = false },
+        .{ .nspace = .from(.{ .config = .vol }), .sub_path = config_filename, .always_create = false },
     },
     else => @compileError("implement this for your os if you want it so bad"),
 };
 
-const g_mfest_cache: ConfFile = .{ .nspace = .from(.{ .cache = .vol_local }), .sub_path = "manifest" };
-const g_oride_prefixes: ConfFile = .{ .nspace = .from(.{ .config = .vol_local }), .sub_path = "prefix-overrides.ini" };
+const g_mfest_cache: ConfFile = .{ .nspace = .from(.{ .cache = .vol }), .sub_path = "manifest" };
+const g_oride_prefixes: ConfFile = .{ .nspace = .from(.{ .config = .vol }), .sub_path = "prefix-overrides.ini" };
 
 conf_file_default: ConfFile = g_conf_file_default,
 conf_file_hierarchy: []const ConfFile = g_conf_file_hierarchy,
@@ -184,33 +183,63 @@ oride_prefixes: ConfFile = g_oride_prefixes,
 vol: []const u8,
 emap: *const std.process.Environ.Map,
 
-pub fn init(vol: []const u8, emap: *std.process.Environ.Map) Conf {
+pub fn init(vol: []const u8, emap: *const std.process.Environ.Map) Conf {
     return .{ .vol = vol, .emap = emap };
 }
 
-pub fn expand(self: Conf, path: []const u8, allocator: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
-    const home_expanded = blk: switch (builtin.os.tag) {
+pub fn expand(self: Conf, path: []const u8, gpa: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
+    var var_exp_alloced = false;
+
+    const var_exp = blk: switch (builtin.os.tag) {
         .linux => {
-            if (path.len > 0 and path[0] == '~') {
-                const home: ?[]const u8 = "/home/vlcaak";
-                // var home = self.emap.get("HOME");
-                // if (home == null)
-                //     home = self.emap.get("USERPROFILE");
+            var iter = std.mem.splitScalar(u8, path, '$');
+            var start_str = iter.next().?;
 
-                // if (home == null)
-                //     std.debug.panic("user home directory could not be inquired", .{});
+            while (iter.next()) |v| {
+                const delim_pos = std.mem.indexOfAny(u8, v, " /") orelse v.len;
+                const key = v[0..delim_pos];
 
-                const slices: []const []const u8 = if (path.len > 2 and path[1] == '/') &.{ home.?, path[2..] } else &.{home.?};
-                break :blk try std.mem.join(allocator, "/", slices);
+                const replace =
+                    if (self.emap.get(key)) |r|
+                        r
+                    else if (std.mem.eql(u8, key, "XDG_CONFIG_HOME"))
+                        config_user_linux_xdg_resort
+                    else if (std.mem.eql(u8, key, "XDG_DATA_HOME"))
+                        pers_user_linux_xdg_resort
+                    else
+                        key;
+
+                const joint = try std.mem.join(gpa, "", &.{ start_str, replace, v[delim_pos..] });
+                if (var_exp_alloced)
+                    gpa.free(start_str);
+
+                var_exp_alloced = true;
+                start_str = joint;
             }
 
-            break :blk try allocator.dupe(u8, path);
-        },
-        else => try allocator.dupe(u8, path),
-    };
-    defer allocator.free(home_expanded);
+            if (std.mem.findScalar(u8, start_str, '~') != null) {
+                const home =
+                    if (self.emap.get("HOME")) |h|
+                        h
+                    else if (self.emap.get("USERPROFILE")) |h|
+                        h
+                    else
+                        @panic("Home directory could not be inquired.");
 
-    return std.mem.replaceOwned(u8, allocator, home_expanded, "{vol}", self.vol);
+                const home_repl = try std.mem.replaceOwned(u8, gpa, start_str, "~", home);
+                if (var_exp_alloced)
+                    gpa.free(start_str);
+
+                start_str = home_repl;
+            }
+
+            break :blk start_str;
+        },
+        else => path,
+    };
+    defer if (var_exp_alloced) gpa.free(var_exp);
+
+    return std.mem.replaceOwned(u8, gpa, var_exp, "{vol}", self.vol);
 }
 
 fn getFileContentFromPath(path: []const u8, allocator: std.mem.Allocator, io: std.Io) GetFileContentFromPathError![]const u8 {
@@ -329,4 +358,16 @@ pub fn set(self: Conf, env_file: ConfFile, key: []const u8, value: []const u8, a
 
         writer.interface.print("{s}={s}\n", .{ key, value }) catch return writer.err.?;
     }
+}
+
+test "expand path" {
+    const gpa = std.testing.allocator;
+    var emap = try std.testing.environ.createMap(gpa);
+    defer emap.deinit();
+
+    const conf: Conf = .init("vol1", &emap);
+    const expanded = try conf.expand(config_vol_linux, gpa);
+    defer gpa.free(expanded);
+
+    try std.testing.expectEqualStrings("/home/vlcaak/.config/dergdrive/vol1", expanded);
 }
