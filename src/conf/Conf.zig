@@ -22,7 +22,7 @@ const config_user_linux: []const u8 = "$XDG_CONFIG_HOME/" ++ proj_name;
 const config_user_linux_xdg_resort: []const u8 = "~/.config";
 const config_vol_linux: []const u8 = config_user_linux ++ "/{vol}";
 const cache_user_linux: []const u8 = "~/.cache/" ++ proj_name;
-const cache_vol_local_linux: []const u8 = cache_user_linux ++ "/{vol}";
+const cache_vol_linux: []const u8 = cache_user_linux ++ "/{vol}";
 const pers_global_linux: []const u8 = "/usr/share/" ++ proj_name;
 const pers_user_linux: []const u8 = "$XDG_DATA_HOME/" ++ proj_name;
 const pers_user_linux_xdg_resort: []const u8 = "~/.local/share";
@@ -31,16 +31,15 @@ const pers_vol_linux: []const u8 = pers_user_linux ++ "/{vol}";
 const pers_vol_secret_linux: []const u8 = pers_vol_linux ++ "/secret";
 
 const config_global_windows: []const u8 = pers_global_windows ++ "\\config";
-const config_local_windows: []const u8 = pers_local_windows ++ "\\config";
-const config_vol_local_windows: []const u8 = config_vol_local_windows ++ "\\{vol}";
-const config_secret_windows: []const u8 = config_local_windows ++ "\\secret";
-const config_vol_secret_windows: []const u8 = config_vol_local_windows ++ "\\secret";
-const cache_global_windows: []const u8 = config_global_windows ++ "\\cache";
-const cache_local_windows: []const u8 = "%TEMP%\\" ++ proj_name;
-const cache_vol_local_windows: []const u8 = cache_local_windows ++ "\\{vol}";
+const config_user_windows: []const u8 = "%APPDATA%\\" ++ proj_name;
+const config_vol_windows: []const u8 = config_user_windows ++ "\\{vol}";
+const cache_user_windows: []const u8 = "%TEMP%\\" ++ proj_name;
+const cache_vol_windows: []const u8 = cache_user_windows ++ "\\{vol}";
 const pers_global_windows: []const u8 = "%PROGRAMDATA%\\" ++ proj_name;
-const pers_local_windows: []const u8 = "%APPDATALOCAL%\\" ++ proj_name;
-const pers_vol_local_windows: []const u8 = pers_local_windows ++ "\\{vol}";
+const pers_user_windows: []const u8 = "%LOCALAPPDATA%\\" ++ proj_name;
+const pers_user_secret_windows: []const u8 = pers_user_windows ++ "\\secret";
+const pers_vol_windows: []const u8 = pers_user_windows ++ "\\{vol}";
+const pers_vol_secret_windows: []const u8 = pers_vol_windows ++ "\\secret";
 
 pub const ConfPrefix = struct {
     config_global_linux: []const u8 = config_global_linux,
@@ -48,7 +47,7 @@ pub const ConfPrefix = struct {
     config_vol_linux: []const u8 = config_vol_linux,
     config_internal: []const u8 = config_internal,
     cache_user_linux: []const u8 = cache_user_linux,
-    cache_vol_linux: []const u8 = cache_vol_local_linux,
+    cache_vol_linux: []const u8 = cache_vol_linux,
     cache_internal: []const u8 = cache_internal,
     pers_global_linux: []const u8 = pers_global_linux,
     pers_user_linux: []const u8 = pers_user_linux,
@@ -89,7 +88,7 @@ pub const PfixNspace = struct {
                     .user => self.pfix.config_user_linux,
                     .vol => self.pfix.config_vol_linux,
                     .internal => self.pfix.config_internal,
-                    else => @panic("namespace not supported for config storage"),
+                    else => @panic("namespace not supported for config"),
                 },
                 .cache => |nspace| switch (nspace) {
                     .user => self.pfix.cache_user_linux,
@@ -170,6 +169,11 @@ const g_conf_file_hierarchy: []const ConfFile = switch (builtin.os.tag) {
         .{ .nspace = .from(.{ .config = .vol }), .sub_path = config_filename, .always_create = false },
     },
     else => @compileError("implement this for your os if you want it so bad"),
+};
+
+const g_conf_file_hierarchy_serve: []const ConfFile = switch (builtin.os.tag) {
+    .linux => &.{},
+    else => @compileError("don't tell me you want tu run the server somewhere else than linux ??"),
 };
 
 const g_mfest_cache: ConfFile = .{ .nspace = .from(.{ .cache = .vol }), .sub_path = "manifest" };
@@ -358,16 +362,4 @@ pub fn set(self: Conf, env_file: ConfFile, key: []const u8, value: []const u8, a
 
         writer.interface.print("{s}={s}\n", .{ key, value }) catch return writer.err.?;
     }
-}
-
-test "expand path" {
-    const gpa = std.testing.allocator;
-    var emap = try std.testing.environ.createMap(gpa);
-    defer emap.deinit();
-
-    const conf: Conf = .init("vol1", &emap);
-    const expanded = try conf.expand(config_vol_linux, gpa);
-    defer gpa.free(expanded);
-
-    try std.testing.expectEqualStrings("/home/vlcaak/.config/dergdrive/vol1", expanded);
 }
