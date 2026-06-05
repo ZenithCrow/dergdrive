@@ -9,7 +9,7 @@ const pipe_adapter = transmit.pipe_adapter;
 const RequestSender = transmit.RequestSender;
 const Cryptor = transmit.Cryptor;
 
-const log = std.log.scoped(.@"cli/commands/test-pipe");
+const log = std.log.scoped(.@"client/cli/commands/test-pipe");
 
 pub const command: cli.Command = .{
     .name = "test-pipe",

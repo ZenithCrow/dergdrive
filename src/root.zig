@@ -1,6 +1,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+pub const client = @import("dergdrive-client");
+const fflags = @import("fflags");
+pub const is_client = fflags.client_fflag;
+pub const is_server = fflags.server_fflag;
+
 pub const crypt = @import("crypt/crypt.zig");
 
 pub const cli = struct {
@@ -10,28 +15,6 @@ pub const cli = struct {
     pub const parser = @import("cli/parser.zig");
     pub const prompt = @import("cli/prompt.zig");
     pub const termfmt = @import("cli/termfmt.zig");
-};
-
-pub const client = struct {
-    pub const track = struct {
-        pub const IncludeTree = @import("client/track/IncludeTree.zig");
-        pub const FileRecordMap = @import("client/track/FileRecordMap.zig");
-        pub const Manifest = @import("client/track/Manifest.zig");
-        pub const SyncOp = @import("client/track/SyncOp.zig");
-        pub const unit_sync = @import("client/track/unit_sync.zig");
-    };
-
-    pub const transmit = struct {
-        pub const ChunkBuffer = @import("client/transmit/ChunkBuffer.zig");
-        pub const Cryptor = @import("client/transmit/Cryptor.zig");
-        pub const FileReader = @import("client/transmit/FileReader.zig");
-        pub const RawFileChunkBuffer = @import("client/transmit/RawFileChunkBuffer.zig");
-        pub const RequestChunkBuffer = @import("client/transmit/RequestChunkBuffer.zig");
-        pub const RequestSender = @import("client/transmit/RequestSender.zig");
-        pub const RequestStorage = @import("client/transmit/RequestStorage.zig");
-        pub const pipe_adapter = @import("client/transmit/pipe_adapter.zig");
-        pub const PrioRequest = @import("client/transmit/PrioRequest.zig");
-    };
 };
 
 pub const conf = struct {
@@ -64,7 +47,7 @@ pub const util = struct {
 };
 
 // pulled from zig 0.15 implementation
-fn refAllDeclsRecursive(comptime T: type) void {
+pub fn refAllDeclsRecursive(comptime T: type) void {
     if (!builtin.is_test) return;
     inline for (comptime std.meta.declarations(T)) |decl| {
         if (@TypeOf(@field(T, decl.name)) == type) {

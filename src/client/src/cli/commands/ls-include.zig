@@ -1,16 +1,19 @@
 const std = @import("std");
 
+const client = @import("client");
+const options = client.cli.options;
+const include_rules_opt = options.@"include-rules";
+const root_dir_opt = options.@"root-dir";
+const vol_opt = options.vol;
+const client_cli = client.cli;
+const command_exec = client_cli.command_exec;
 const dergdrive = @import("dergdrive");
 const cli = dergdrive.cli;
 const conf = dergdrive.conf;
 const IncludeTree = dergdrive.client.track.IncludeTree;
 const Env = conf.Env;
 
-const include_rules_opt = @import("../options/include-rules.zig");
-const root_dir_opt = @import("../options/root-dir.zig");
-const vol_opt = @import("../options/vol.zig");
-
-const log = std.log.scoped(.@"cli/commands/ls-include");
+const log = std.log.scoped(.@"client/cli/commands/ls-include");
 
 pub const command: cli.Command = .{
     .name = "ls-include",
@@ -73,11 +76,11 @@ const Mode = enum {
     traverse,
 };
 
-inline fn lsInclude(args: []const []const u8, emap: *std.process.Environ.Map, allocator: std.mem.Allocator, io: std.Io) !void {
-    const ctx = try cli.command_exec.initBroadContext(args, emap, allocator, io);
+inline fn lsInclude(args: []const []const u8, emap: *const std.process.Environ.Map, allocator: std.mem.Allocator, io: std.Io) !void {
+    const ctx = try command_exec.initBroadContext(args, emap, allocator, io);
     defer ctx.deinit(allocator);
 
-    var param_vals: cli.command_exec.ParamContextValues = try .init(ctx, allocator, io);
+    var param_vals: command_exec.ParamContextValues = try .init(ctx, allocator, io);
     defer param_vals.deinit(allocator, io);
     // beyond this point, `root_path` and `include_rules_path` are not null
 
