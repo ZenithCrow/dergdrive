@@ -22,6 +22,10 @@ pub fn build(b: *std.Build) void {
     // even though the import is added internally in the module itself to guide the language server, without adding it here the build will fail saying there are multiple modules sharing the same root file
     client_mod.addImport("dergdrive", mod);
 
+    const server_dep = b.dependency("dergdrive_server", .{});
+    const server_mod = server_dep.module("dergdrive-server");
+    server_mod.addImport("dergdrive", mod);
+
     mod.addOptions("fflags", fflags);
     mod.addImport("dergdrive", mod);
     mod.addImport("dergdrive-client", client_mod);

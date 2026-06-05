@@ -32,7 +32,7 @@ const CommandFflags = struct {
 
 pub const CommandTup = struct { []const u8, CommandFflags };
 
-fn makeTupleOf(comptime command_list: []const Command, is_server_cmd: bool) [command_list.len]CommandTup {
+fn makeTuplesOf(comptime command_list: []const Command, is_server_cmd: bool) [command_list.len]CommandTup {
     var tups: [command_list.len]CommandTup = undefined;
     for (command_list, &tups) |command, *tup| {
         tup.@"0" = command.name;
@@ -45,10 +45,10 @@ fn makeTupleOf(comptime command_list: []const Command, is_server_cmd: bool) [com
     return tups;
 }
 
-const command_tups: []const CommandTup = &(makeTupleOf(global_commands, false) ++ switch (@as(u2, @intFromBool(is_client)) << 1 | @as(u2, @intFromBool(is_server))) {
+const command_tups: []const CommandTup = &(makeTuplesOf(global_commands, false) ++ switch (@as(u2, @intFromBool(is_client)) << 1 | @as(u2, @intFromBool(is_server))) {
     0b00 => .{},
     0b01 => .{},
-    0b10 => makeTupleOf(client.cli.command_exec.command_list, false),
+    0b10 => makeTuplesOf(client.cli.command_exec.command_list, false),
     else => .{},
 });
 
