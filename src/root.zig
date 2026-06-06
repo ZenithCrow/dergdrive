@@ -5,6 +5,7 @@ pub const client = @import("dergdrive-client");
 const fflags = @import("fflags");
 pub const is_client = fflags.client_fflag;
 pub const is_server = fflags.server_fflag;
+pub const server = @import("dergdrive-server");
 
 pub const crypt = @import("crypt/crypt.zig");
 

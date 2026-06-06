@@ -19,7 +19,7 @@ pub fn main(init: std.process.Init) !void {
 
             switch (e) {
                 error.UnknownCommand => std.log.err("unrecognized command: {s}", .{args[1]}),
-                error.NoArgsProvided => std.log.err("expected command argument", .{}),
+                error.TooFewArguments => std.log.err("expected command argument", .{}),
                 error.InvalidSyntax => std.log.err("invalid syntax", .{}),
             }
 

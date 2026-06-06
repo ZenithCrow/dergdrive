@@ -2,7 +2,11 @@ const std = @import("std");
 
 const cli = @import("dergdrive").cli;
 
-pub const ExecError = error{ InvalidSyntax, ReturnStatusFailure };
+pub const ExecError = error{
+    InvalidSyntax,
+    ReturnStatusFailure,
+    TooFewArguments,
+};
 
 name: []const u8,
 usage: []const u8,

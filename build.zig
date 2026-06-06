@@ -29,6 +29,7 @@ pub fn build(b: *std.Build) void {
     mod.addOptions("fflags", fflags);
     mod.addImport("dergdrive", mod);
     mod.addImport("dergdrive-client", client_mod);
+    mod.addImport("dergdrive-server", server_mod);
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
