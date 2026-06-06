@@ -16,7 +16,7 @@ pub const command: cli.Command = .{
             if (cli.parser.indexOfOption(args, ver_only_opt.long, ver_only_opt.short) != null) {
                 stdout_w.interface.writeAll(dergdrive.version ++ "\n") catch return ExecError.ReturnStatusFailure;
             } else {
-                stdout_w.interface.writeAll("Dergdrive " ++ dergdrive.version ++ " " ++ switch (@as(u2, @intFromBool(dergdrive.is_client)) << 1 | @as(u2, @intFromBool(dergdrive.is_server))) {
+                stdout_w.interface.writeAll(cli.command_exec.prog_name ++ " " ++ dergdrive.version ++ " " ++ switch (@as(u2, @intFromBool(dergdrive.is_client)) << 1 | @as(u2, @intFromBool(dergdrive.is_server))) {
                     0b00 => "whar?",
                     0b01 => "server only",
                     0b10 => "client only",
