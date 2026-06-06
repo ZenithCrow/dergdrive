@@ -6,10 +6,18 @@ const fflags = @import("fflags");
 pub const is_client = fflags.client_fflag;
 pub const is_server = fflags.server_fflag;
 pub const server = @import("dergdrive-server");
+pub const version = @import("version").v;
 
 pub const crypt = @import("crypt/crypt.zig");
 
 pub const cli = struct {
+    pub const commands = struct {
+        pub const help = @import("cli/commands/help.zig");
+        pub const version = @import("cli/commands/version.zig");
+    };
+    pub const options = struct {
+        pub const help = @import("cli/options/help.zig");
+    };
     pub const command_exec = @import("cli/command_exec.zig");
     pub const Command = @import("cli/Command.zig");
     pub const Option = @import("cli/Option.zig");

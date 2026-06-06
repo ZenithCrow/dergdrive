@@ -9,6 +9,7 @@ const is_server = dergdrive.is_server;
 
 const Command = @import("Command.zig");
 const help_cmd = @import("commands/help.zig");
+const version_cmd = @import("commands/version.zig");
 const Option = @import("Option.zig");
 const help_opt = @import("options/help.zig");
 const parser = @import("parser.zig");
@@ -23,6 +24,7 @@ pub const ExecError = error{
 
 const global_commands: []const Command = &[_]Command{
     help_cmd.command,
+    version_cmd.command,
 } ++ if (is_server) &[_]Command{server.cli.commands.server.command} else &[_]Command{};
 
 pub const global_options: []const Option = &.{help_opt.option};

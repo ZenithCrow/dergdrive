@@ -11,6 +11,9 @@ pub fn build(b: *std.Build) void {
     fflags.addOption(@TypeOf(client_fflag), "client_fflag", client_fflag);
     fflags.addOption(@TypeOf(server_fflag), "server_fflag", server_fflag);
 
+    const version = b.addOptions();
+    version.addOption([]const u8, "v", getVersionStr(b));
+
     const mod = b.addModule("dergdrive", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -27,6 +30,7 @@ pub fn build(b: *std.Build) void {
     server_mod.addImport("dergdrive", mod);
 
     mod.addOptions("fflags", fflags);
+    mod.addOptions("version", version);
     mod.addImport("dergdrive", mod);
     mod.addImport("dergdrive-client", client_mod);
     mod.addImport("dergdrive-server", server_mod);
@@ -79,4 +83,59 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_client_mod_tests.step);
+}
+
+// from zig compiler
+fn getVersionStr(b: *std.Build) []const u8 {
+    const version: std.SemanticVersion = .{ .major = 0, .minor = 1, .patch = 0 };
+    const version_string = b.fmt("{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
+    if (!std.process.can_spawn)
+        return version_string;
+
+    var code: u8 = undefined;
+    const git_describe_untrimmed = b.runAllowFail(&[_][]const u8{
+        "git",
+        "-C", b.build_root.path orelse ".", // affects the --git-dir argument
+        "--git-dir", ".git", // affected by the -C argument
+        "describe", "--match",    "*.*.*", //
+        "--tags",   "--abbrev=9",
+    }, &code, .ignore) catch return version_string;
+    const git_describe = std.mem.trim(u8, git_describe_untrimmed, " \n\r");
+
+    switch (std.mem.countScalar(u8, git_describe, '-')) {
+        0 => {
+            // Tagged release version (e.g. 0.10.0).
+            if (!std.mem.eql(u8, git_describe, version_string)) {
+                std.debug.print("version '{s}' does not match Git tag '{s}'\n", .{ version_string, git_describe });
+                std.process.exit(1);
+            }
+            return version_string;
+        },
+        2 => {
+            // Untagged development build (e.g. 0.10.0-dev.2025+ecf0050a9).
+            var it = std.mem.splitScalar(u8, git_describe, '-');
+            const tagged_ancestor = it.first();
+            const commit_height = it.next().?;
+            const commit_id = it.next().?;
+
+            const ancestor_ver = std.SemanticVersion.parse(tagged_ancestor) catch unreachable;
+            if (version.order(ancestor_ver) != .gt) {
+                std.debug.print("version '{f}' must be greater than tagged ancestor '{f}'\n", .{ version, ancestor_ver });
+                std.process.exit(1);
+            }
+
+            // Check that the commit hash is prefixed with a 'g' (a Git convention).
+            if (commit_id.len < 1 or commit_id[0] != 'g') {
+                std.debug.print("unexpected `git describe` output: {s}\n", .{git_describe});
+                return version_string;
+            }
+
+            // The version is reformatted in accordance with the https://semver.org specification.
+            return b.fmt("{s}-dev.{s}+{s}", .{ version_string, commit_height, commit_id[1..] });
+        },
+        else => {
+            std.debug.print("unexpected `git describe` output: {s}\n", .{git_describe});
+            return version_string;
+        },
+    }
 }
