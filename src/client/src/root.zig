@@ -11,9 +11,12 @@ pub const cli = struct {
 
     pub const options = struct {
         pub const @"include-rules" = @import("cli/options/include-rules.zig");
-        pub const @"root-dir" = @import("cli/options/root-dir.zig");
         pub const vol = @import("cli/options/vol.zig");
     };
+};
+
+pub const conf = struct {
+    pub const Conf = @import("conf/Conf.zig");
 };
 
 pub const track = struct {

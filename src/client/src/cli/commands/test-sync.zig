@@ -3,7 +3,6 @@ const std = @import("std");
 const client = @import("client");
 const options = client.cli.options;
 const include_rules_opt = options.@"include-rules";
-const root_dir_opt = options.@"root-dir";
 const vol_opt = options.vol;
 const client_cli = client.cli;
 const command_exec = client_cli.command_exec;
@@ -14,6 +13,7 @@ const FileRecordMap = dergdrive.client.track.FileRecordMap;
 const FileReader = dergdrive.client.transmit.FileReader;
 const SyncOp = dergdrive.client.track.SyncOp;
 const unit_sync = dergdrive.client.track.unit_sync;
+const root_dir_opt = dergdrive.cli.options.@"root-dir";
 
 const log = std.log.scoped(.@"client/cli/commands/test-sync");
 
@@ -40,7 +40,7 @@ pub const command: cli.Command = .{
 };
 
 fn testSync(args: []const []const u8, emap: *std.process.Environ.Map, allocator: std.mem.Allocator, io: std.Io) !void {
-    const ctx = try command_exec.initBroadContext(args, emap, allocator, io);
+    const ctx: command_exec.ParamContext = try .init(args, emap, allocator, io);
     defer ctx.deinit(allocator);
 
     var param_vals: command_exec.ParamContextValues = try .init(ctx, allocator, io);

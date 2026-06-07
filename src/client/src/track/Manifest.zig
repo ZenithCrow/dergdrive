@@ -1,21 +1,23 @@
 const std = @import("std");
 
+const client = @import("client");
+const Conf = client.conf.Conf;
 const dergdrive = @import("dergdrive");
-const Conf = dergdrive.conf.Conf;
 const crypt = dergdrive.crypt;
 const slc = dergdrive.util.slc;
+const RootConf = dergdrive.conf.Conf;
 
 const FileRecordMap = @import("FileRecordMap.zig");
 
-const StoreLocalPrefixOverridesError = Conf.OpenOrCreateConfFileError || std.Io.File.Writer.Error;
+const StoreLocalPrefixOverridesError = RootConf.OpenOrCreateConfFileError || std.Io.File.Writer.Error;
 const Manifest = @This();
 
 const log = std.log.scoped(.@"client/track/Manifest");
 
 const local_prefix_disclaimer: []const u8 = @embedFile("local-prefix-notice.txt");
 
-const LoadLocalPrefixOverridesError = Conf.GetConfError || std.mem.Allocator.Error;
-const GetSyncTimestampFromCachedManifestError = Conf.OpenOrCreateConfFileError || std.Io.File.Reader.Error || LoadFromManifestFileError;
+const LoadLocalPrefixOverridesError = RootConf.GetConfError || std.mem.Allocator.Error;
+const GetSyncTimestampFromCachedManifestError = RootConf.OpenOrCreateConfFileError || std.Io.File.Reader.Error || LoadFromManifestFileError;
 const LoadFromManifestFileError = error{ NotLoaded, Illformed };
 const LoadManifestError = LoadFromManifestFileError || std.mem.Allocator.Error;
 const StoreManifestError = LoadFromManifestFileError || std.Io.Writer.Error;
@@ -186,7 +188,7 @@ pub fn getSyncTimestamp(self: Manifest) LoadFromManifestFileError!Timestamp {
 }
 
 pub fn getSyncTimestampFromCachedManifest(self: Manifest) GetSyncTimestampFromCachedManifestError!?Timestamp {
-    const file = self.conf.openOrCreateConfFile(self.conf.mfest_cache, false, self.allocator, self.io) catch |err| switch (err) {
+    const file = self.conf.root_conf.openOrCreateConfFile(self.conf.mfest_cache, false, self.allocator, self.io) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
@@ -203,8 +205,8 @@ pub fn getSyncTimestampFromCachedManifest(self: Manifest) GetSyncTimestampFromCa
     return self_cpy.getSyncTimestamp() catch unreachable;
 }
 
-pub fn openCachedManifest(self: *Manifest) Conf.GetConfError!void {
-    self.mfest_file = .owned(self.conf.getConf(self.conf.mfest_cache, self.allocator, self.io) catch |err| {
+pub fn openCachedManifest(self: *Manifest) RootConf.GetConfError!void {
+    self.mfest_file = .owned(self.conf.root_conf.getConf(self.conf.mfest_cache, self.allocator, self.io) catch |err| {
         if (self.mfest_file) |mfest| {
             mfest.deinit();
         }
@@ -212,17 +214,17 @@ pub fn openCachedManifest(self: *Manifest) Conf.GetConfError!void {
         self.mfest_file = null;
 
         return switch (err) {
-            Conf.GetConfError.FileNotFound => {},
+            RootConf.GetConfError.FileNotFound => {},
             else => err,
         };
     }, self.allocator);
 }
 
 pub fn loadLocalPrefixOverrides(self: *Manifest) LoadLocalPrefixOverridesError!void {
-    const buf = try self.conf.getConf(self.conf.oride_prefixes, self.allocator, self.io);
+    const buf = try self.conf.root_conf.getConf(self.conf.oride_prefixes, self.allocator, self.io);
     defer self.allocator.free(buf);
 
-    var iter: Conf.KeyValueIterator = .init(buf);
+    var iter: RootConf.KeyValueIterator = .init(buf);
     while (iter.next()) |kv| {
         if (kv.key.len == 0) {
             log.warn("Couldn't parse prefix from empty key.", .{});
@@ -251,11 +253,11 @@ test "format id to hex" {
 }
 
 pub fn storeLocalPrefixOverrides(self: Manifest) StoreLocalPrefixOverridesError!void {
-    const file = try self.conf.openOrCreateConfFile(self.conf.oride_prefixes, true, self.allocator, self.io);
+    const file = try self.conf.root_conf.openOrCreateConfFile(self.conf.oride_prefixes, true, self.allocator, self.io);
     var w_buf: [512]u8 = undefined;
     var writer = file.writer(self.io, &w_buf);
 
-    writer.interface.print(local_prefix_disclaimer, .{Conf.proj_name}) catch return writer.err.?;
+    writer.interface.print(local_prefix_disclaimer, .{RootConf.proj_name}) catch return writer.err.?;
 
     var iter = self.oride_pfixes.iterator();
     while (iter.next()) |kv| {
@@ -401,7 +403,7 @@ test "manifest parsing" {
     var emap = try std.testing.environ.createMap(arena);
     defer emap.deinit();
 
-    const conf: Conf = .{ .vol = "test_vol", .emap = &emap };
+    const conf: Conf = .init("vol1", &emap);
     var manifest: Manifest = .init(conf, allocator, io);
     defer manifest.deinit();
 

@@ -159,37 +159,22 @@ pub const KeyValueIterator = struct {
     }
 };
 
-const config_filename = "config.ini";
-const g_conf_file_default: ConfFile = .{ .nspace = .from(.{ .config = .user }), .sub_path = config_filename, .always_create = true };
-const g_conf_file_hierarchy: []const ConfFile = switch (builtin.os.tag) {
+pub const config_filename = "config.ini";
+pub const g_conf_file_default: ConfFile = .{ .nspace = .from(.{ .config = .user }), .sub_path = config_filename, .always_create = true };
+pub const g_conf_file_hierarchy: []const ConfFile = switch (builtin.os.tag) {
     .linux => &.{
         .{ .nspace = .from(.{ .config = .internal }), .sub_path = config_filename, .always_create = false },
         .{ .nspace = .from(.{ .config = .global }), .sub_path = config_filename, .always_create = false },
         g_conf_file_default,
-        .{ .nspace = .from(.{ .config = .vol }), .sub_path = config_filename, .always_create = false },
     },
     else => @compileError("implement this for your os if you want it so bad"),
 };
 
-const g_conf_file_hierarchy_serve: []const ConfFile = switch (builtin.os.tag) {
-    .linux => &.{},
-    else => @compileError("don't tell me you want tu run the server somewhere else than linux ??"),
-};
-
-const g_mfest_cache: ConfFile = .{ .nspace = .from(.{ .cache = .vol }), .sub_path = "manifest" };
-const g_oride_prefixes: ConfFile = .{ .nspace = .from(.{ .config = .vol }), .sub_path = "prefix-overrides.ini" };
-
 conf_file_default: ConfFile = g_conf_file_default,
 conf_file_hierarchy: []const ConfFile = g_conf_file_hierarchy,
-mfest_cache: ConfFile = g_mfest_cache,
-oride_prefixes: ConfFile = g_oride_prefixes,
-
-vol: []const u8,
 emap: *const std.process.Environ.Map,
-
-pub fn init(vol: []const u8, emap: *const std.process.Environ.Map) Conf {
-    return .{ .vol = vol, .emap = emap };
-}
+// default value for compatiblity with server implementation (client should always override it)
+vol: []const u8 = "snudoo",
 
 pub fn expand(self: Conf, path: []const u8, gpa: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
     var var_exp_alloced = false;

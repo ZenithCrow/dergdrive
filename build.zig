@@ -85,7 +85,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_client_mod_tests.step);
 }
 
-// from zig compiler
+// taken from build.zig of the zig compiler, I really like their version tagging system :3
 fn getVersionStr(b: *std.Build) []const u8 {
     const version: std.SemanticVersion = .{ .major = 0, .minor = 1, .patch = 0 };
     const version_string = b.fmt("{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
@@ -98,7 +98,7 @@ fn getVersionStr(b: *std.Build) []const u8 {
         "-C", b.build_root.path orelse ".", // affects the --git-dir argument
         "--git-dir", ".git", // affected by the -C argument
         "describe", "--match",    "*.*.*", //
-        "--tags",   "--abbrev=9",
+        "--tags",   "--abbrev=8",
     }, &code, .ignore) catch return version_string;
     const git_describe = std.mem.trim(u8, git_describe_untrimmed, " \n\r");
 

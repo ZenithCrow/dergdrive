@@ -8,6 +8,8 @@ pub const StoreEnvsError = std.mem.Allocator.Error || Conf.OpenOrCreateConfFileE
 
 const log = std.log.scoped(.@"conf/Env");
 
+pub const load_evs_err_notice = "Failed to load envs due to error: {t}.";
+
 pub const EnvValue = struct {
     val: []const u8,
     conf_file: Conf.ConfFile,
@@ -173,7 +175,10 @@ pub fn set(self: *Env, key: []const u8, val: []const u8, conf_file: ?Conf.ConfFi
         try self.modified_envs.putContext(self.allocator, conf_file orelse self.conf.conf_file_default, {}, self.modified_envs_ctx);
 }
 
-test "env config" {
+test "client env config" {
+    const dergdrive = @import("dergdrive");
+    const client = dergdrive.client;
+
     const allocator = std.testing.allocator;
     var arena_alloc: std.heap.ArenaAllocator = .init(allocator);
     defer arena_alloc.deinit();
@@ -184,8 +189,8 @@ test "env config" {
     var emap = try std.testing.environ.createMap(arena);
     defer emap.deinit();
 
-    var conf: Conf = .{ .vol = "vol1", .emap = &emap };
-    var hierarchy = try allocator.dupe(Conf.ConfFile, conf.conf_file_hierarchy);
+    var conf: client.conf.Conf = .init("vol1", &emap);
+    var hierarchy = try allocator.dupe(Conf.ConfFile, conf.root_conf.conf_file_hierarchy);
     defer allocator.free(hierarchy);
 
     const pfix: Conf.ConfPrefix = .{
@@ -201,13 +206,13 @@ test "env config" {
         cf.nspace.pfix = pfix;
     }
 
-    conf.conf_file_hierarchy = hierarchy;
-    conf.conf_file_default.nspace.pfix = pfix;
+    conf.root_conf.conf_file_hierarchy = hierarchy;
+    conf.root_conf.conf_file_default.nspace.pfix = pfix;
 
     const weird_value: []const u8 = "hm = mmm - -ad -== 000";
 
     {
-        var env: Env = .init(conf, allocator, io);
+        var env: Env = .init(conf.root_conf, allocator, io);
         defer env.deinit();
 
         try env.set("foo", "bar", null);
@@ -233,10 +238,10 @@ test "env config" {
     hierarchy = try allocator.realloc(hierarchy, hierarchy.len + 1);
     hierarchy[hierarchy.len - 1] = .{ .nspace = .{ .nspace = .{ .config = .global }, .pfix = pfix }, .sub_path = "cowonfig.env" };
 
-    conf.conf_file_hierarchy = hierarchy;
+    conf.root_conf.conf_file_hierarchy = hierarchy;
 
     {
-        var env: Env = .init(conf, allocator, io);
+        var env: Env = .init(conf.root_conf, allocator, io);
         defer env.deinit();
 
         try env.loadEnvs();

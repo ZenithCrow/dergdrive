@@ -17,6 +17,7 @@ pub const cli = struct {
     };
     pub const options = struct {
         pub const help = @import("cli/options/help.zig");
+        pub const @"root-dir" = @import("cli/options/root-dir.zig");
     };
     pub const command_exec = @import("cli/command_exec.zig");
     pub const Command = @import("cli/Command.zig");

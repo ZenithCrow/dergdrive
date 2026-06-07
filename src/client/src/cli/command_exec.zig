@@ -9,13 +9,15 @@ const @"test-sync_cmd" = commands.@"test-sync";
 const client_cli = client.cli;
 const options = client_cli.options;
 const vol_opt = options.vol;
-const @"root-dir_opt" = options.@"root-dir";
 const @"include-rules_opt" = options.@"include-rules";
+const Conf = client.conf.Conf;
 const dergdrive = @import("dergdrive");
 const Command = dergdrive.cli.Command;
 const command_exec_root = dergdrive.cli.command_exec;
 const Option = dergdrive.cli.Option;
 const parser = dergdrive.cli.parser;
+const Env = dergdrive.conf.Env;
+const @"root-dir_opt" = dergdrive.cli.options.@"root-dir";
 
 const log = std.log.scoped(.@"client/cli/command_exec");
 
@@ -28,8 +30,8 @@ pub const command_list: []const Command = &(.{
 
 pub const ParamContext = struct {
     args: []const []const u8,
-    conf: *dergdrive.conf.Conf,
-    env: *dergdrive.conf.Env,
+    conf: *Conf,
+    env: *Env,
     vol: ?[]const u8 = null,
     root_path: ?[]const u8 = null,
     include_rules_path: ?[]const u8 = null,
@@ -40,60 +42,54 @@ pub const ParamContext = struct {
         self.env.deinit();
         allocator.destroy(self.env);
     }
-};
 
-const load_evs_err_notice = "Failed to load envs due to error: {t}.";
+    pub fn init(args: []const []const u8, emap: *const std.process.Environ.Map, allocator: std.mem.Allocator, io: std.Io) dergdrive.cli.Command.ExecError!ParamContext {
+        const conf = allocator.create(Conf) catch |err| {
+            log.err(Env.load_evs_err_notice, .{err});
+            return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
+        };
+        errdefer allocator.destroy(conf);
 
-pub fn initBroadContext(args: []const []const u8, emap: *const std.process.Environ.Map, allocator: std.mem.Allocator, io: std.Io) dergdrive.cli.Command.ExecError!ParamContext {
-    const conf = allocator.create(dergdrive.conf.Conf) catch |err| {
-        log.err(load_evs_err_notice, .{err});
-        return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
-    };
-    errdefer allocator.destroy(conf);
+        conf.* = .init("", emap);
 
-    conf.* = .init("", emap);
+        const env = allocator.create(Env) catch |err| {
+            log.err(Env.load_evs_err_notice, .{err});
+            return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
+        };
+        errdefer allocator.destroy(env);
 
-    const env = allocator.create(dergdrive.conf.Env) catch |err| {
-        log.err(load_evs_err_notice, .{err});
-        return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
-    };
-    errdefer allocator.destroy(env);
+        env.* = .init(conf.root_conf, allocator, io);
+        errdefer env.deinit();
 
-    env.* = .init(conf.*, allocator, io);
-    errdefer env.deinit();
-
-    env.loadEnvs() catch |err| {
-        log.err(load_evs_err_notice, .{err});
-        return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
-    };
-
-    const vol = if (getCliThenConfigValue(env, vol_opt.default_vol_opt_name, args, vol_opt.option)) |v| blk: {
-        conf.* = .init(v, emap);
-
-        // replace env with newer one having volume context
-        env.deinit();
-        env.* = .init(conf.*, allocator, io);
         env.loadEnvs() catch |err| {
-            log.err(load_evs_err_notice, .{err});
+            log.err(Env.load_evs_err_notice, .{err});
             return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
         };
 
-        break :blk v;
-    } else null;
+        const vol = if (command_exec_root.getCliThenConfigValue(env, vol_opt.default_vol_opt_name, args, vol_opt.option)) |v| blk: {
+            conf.* = .init(v, emap);
 
-    return .{
-        .args = args,
-        .conf = conf,
-        .env = env,
-        .vol = vol,
-        .root_path = getCliThenConfigValue(env, @"root-dir_opt".root_dir_opt_name, args, @"root-dir_opt".option),
-        .include_rules_path = getCliThenConfigValue(env, @"include-rules_opt".include_rules_opt_name, args, @"include-rules_opt".option),
-    };
-}
+            // replace env with newer one having volume context
+            env.deinit();
+            env.* = .init(conf.root_conf, allocator, io);
+            env.loadEnvs() catch |err| {
+                log.err(Env.load_evs_err_notice, .{err});
+                return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
+            };
 
-pub fn getCliThenConfigValue(env: *const dergdrive.conf.Env, config_opt_name: []const u8, args: []const []const u8, cli_opt: Option) ?[]const u8 {
-    return if (parser.getAssociatedValue(args, cli_opt.long, cli_opt.short, (cli_opt.value orelse return null).eql_sign)) |v| v else if (env.get(config_opt_name)) |v| v else null;
-}
+            break :blk v;
+        } else null;
+
+        return .{
+            .args = args,
+            .conf = conf,
+            .env = env,
+            .vol = vol,
+            .root_path = command_exec_root.getCliThenConfigValue(env, @"root-dir_opt".root_dir_opt_name, args, @"root-dir_opt".option),
+            .include_rules_path = command_exec_root.getCliThenConfigValue(env, @"include-rules_opt".include_rules_opt_name, args, @"include-rules_opt".option),
+        };
+    }
+};
 
 pub const ParamContextValues = struct {
     root_dir_iterable: std.Io.Dir,
