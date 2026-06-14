@@ -1,6 +1,7 @@
 const std = @import("std");
 
-const sync = @import("dergdrive").proto.sync;
+const proto = @import("dergdrive").proto;
+const sync = proto.sync;
 const TransmitChunkMsg = sync.templates.TransmitChunkMsg;
 
 const ChunkBuffer = @import("ChunkBuffer.zig");
@@ -14,7 +15,7 @@ trns_msg: TransmitChunkMsg,
 req_id: ?sync.RequestChunk.IdT = null,
 
 pub fn init(allocator: std.mem.Allocator) std.mem.Allocator.Error!RequestChunkBuffer {
-    const chunk_buf: ChunkBuffer = .{ .buf = try allocator.alloc(u8, ChunkBuffer.chunk_size) };
+    const chunk_buf: ChunkBuffer = .{ .buf = try allocator.alloc(u8, proto.common.op_buf_size) };
 
     return .{
         .chunk_buf = chunk_buf,

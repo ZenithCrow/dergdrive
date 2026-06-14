@@ -33,8 +33,10 @@ pub const conf = struct {
 };
 
 pub const proto = struct {
+    pub const common = @import("proto/common.zig");
     pub const sync = struct {
         pub const SyncMessage = @import("proto/sync/SyncMessage.zig");
+        pub const ZeroTrustMsgIterator = @import("proto/sync/ZeroTrustMsgIterator.zig");
         pub const RequestChunk = @import("proto/sync/RequestChunk.zig");
         pub const BreakChunk = @import("proto/sync/BreakChunk.zig");
         pub const header = @import("proto/sync/header.zig");

@@ -4,3 +4,7 @@ pub const cli = struct {
     };
     pub const command_exec = @import("cli/command_exec.zig");
 };
+
+pub const rxtx = struct {
+    pub const ConnectionWorker = @import("rxtx/ConnectionWorker.zig");
+};

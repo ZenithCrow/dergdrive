@@ -7,8 +7,6 @@ pub const FillState = enum(u1) {
     full = 1,
 };
 
-pub const chunk_size = 0x400000; // 4 MiB
-
 buf: []u8,
 data_len: usize = 0,
 fill_state: FillState = .empty,

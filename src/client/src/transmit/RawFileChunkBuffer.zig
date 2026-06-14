@@ -1,6 +1,7 @@
 const std = @import("std");
 
-const sync = @import("dergdrive").proto.sync;
+const proto = @import("dergdrive").proto;
+const sync = proto.sync;
 
 const ChunkBuffer = @import("ChunkBuffer.zig");
 const Cryptor = @import("Cryptor.zig");
@@ -8,7 +9,7 @@ const RequestStorage = @import("RequestStorage.zig");
 
 const RawFileChunkBuffer = @This();
 
-pub const buf_size = ChunkBuffer.chunk_size - (Cryptor.enc_add_info_len + sync.templates.TransmitChunkMsg.non_payload_size);
+pub const buf_size = proto.common.op_buf_size - (Cryptor.enc_add_info_len + sync.templates.TransmitChunkMsg.non_payload_size);
 
 chunk_buf: ChunkBuffer,
 req_id: ?sync.RequestChunk.IdT = null,

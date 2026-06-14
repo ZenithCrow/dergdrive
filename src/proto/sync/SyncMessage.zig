@@ -20,6 +20,10 @@ pub fn dataBuf(self: SyncMessage) []u8 {
     return self.msg_buf[header.header_size..];
 }
 
+pub fn iter(self: SyncMessage) Chunk.Iterator {
+    return .{ .buffer = self.dataBuf() };
+}
+
 /// compute the total size of data in the message excluding the size header
 pub fn dataSize(self: SyncMessage) Chunk.ReadError!header.DataLenT {
     var chunk_iter = try iterFromBuf(self.msg_buf);
