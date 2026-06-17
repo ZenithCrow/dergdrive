@@ -1,5 +1,8 @@
 const dergdrive = @import("dergdrive");
 
+pub const Conf = @import("Conf.zig");
+pub const SecAuth = @import("SecAuth.zig");
+
 pub const cli = struct {
     pub const command_exec = @import("cli/command_exec.zig");
 
@@ -13,10 +16,6 @@ pub const cli = struct {
         pub const @"include-rules" = @import("cli/options/include-rules.zig");
         pub const vol = @import("cli/options/vol.zig");
     };
-};
-
-pub const conf = struct {
-    pub const Conf = @import("conf/Conf.zig");
 };
 
 pub const track = struct {

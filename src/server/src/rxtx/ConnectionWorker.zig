@@ -14,7 +14,7 @@ const log = std.log.scoped(.@"server/rxtx/ConnectionWorker");
 stream: net.Stream,
 write_buf: []u8,
 read_buf: []u8,
-writer: std.Io.Writer,
+writer: net.Stream.Writer,
 write_lock: std.Io.Mutex,
 
 pub fn init(stream: net.Stream, gpa: std.mem.Allocator, io: std.Io) std.mem.Allocator.Error!ConnectionWorker {
@@ -35,7 +35,7 @@ pub fn work(self: *ConnectionWorker, io: std.Io) net.Stream.Reader.Error!void {
     var msg_iter: ZeroTrustMsgIterator = .{ .buf = self.read_buf };
 
     while (true) {
-        const msg = try msg_iter.nextMsg(&reader.interface);
+        const msg = msg_iter.nextMsg(&reader.interface) catch return reader.err.?;
         var chunk_iter = msg.iter();
 
         const chunk = chunk_iter.next() catch |err| {

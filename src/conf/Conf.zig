@@ -159,7 +159,7 @@ pub const KeyValueIterator = struct {
     }
 };
 
-pub const config_filename = "config.ini";
+pub const config_filename = "config";
 pub const g_conf_file_default: ConfFile = .{ .nspace = .from(.{ .config = .user }), .sub_path = config_filename, .always_create = true };
 pub const g_conf_file_hierarchy: []const ConfFile = switch (builtin.os.tag) {
     .linux => &.{
@@ -287,14 +287,12 @@ pub fn writeConfFile(self: Conf, conf_file: ConfFile, truncate: bool, data: []co
     return writer.interface.writeAll(data) catch writer.err.?;
 }
 
-/// use env layer instead of this access
 pub fn get(self: Conf, env_file: ConfFile, key: []const u8, allocator: std.mem.Allocator, io: std.Io) GetConfError!?[]const u8 {
     const iter: KeyValueIterator = .init(try self.getConf(env_file, allocator, io));
     defer allocator.free(iter.line_iter.buffer);
     return if (getFromIter(iter, key)) |value| try allocator.dupe(u8, value) else null;
 }
 
-/// use env layer instead of this access
 pub fn getFromIter(kv_iter: KeyValueIterator, key: []const u8) ?[]const u8 {
     var iter_cpy = kv_iter;
     iter_cpy.line_iter.index = 0;
@@ -304,7 +302,6 @@ pub fn getFromIter(kv_iter: KeyValueIterator, key: []const u8) ?[]const u8 {
     } else null;
 }
 
-/// use env layer instead of this accesss
 pub fn set(self: Conf, env_file: ConfFile, key: []const u8, value: []const u8, allocator: std.mem.Allocator, io: std.Io) SetError!void {
     const file = try self.openOrCreateConfFile(env_file, false, allocator, io);
     defer file.close(io);
@@ -324,13 +321,14 @@ pub fn set(self: Conf, env_file: ConfFile, key: []const u8, value: []const u8, a
         if (std.mem.eql(u8, entry.key, key)) {
             key_len = entry.key.len;
             val_len = entry.value.len;
+            index = entry.key.ptr - buf.ptr;
             break true;
         }
     } else false;
 
     if (insert) {
         const tail_index = index + key_len + val_len + 1;
-        const len_diff: isize = @bitCast(value.len -% val_len);
+        const len_diff: isize = @as(isize, @bitCast(value.len)) - @as(isize, @bitCast(val_len));
         const new_len: usize = @bitCast(@as(isize, @bitCast(buf.len)) + len_diff);
 
         writer.seekTo(index + key_len + 1) catch return writer.seek_err.?;
@@ -347,4 +345,31 @@ pub fn set(self: Conf, env_file: ConfFile, key: []const u8, value: []const u8, a
 
         writer.interface.print("{s}={s}\n", .{ key, value }) catch return writer.err.?;
     }
+}
+
+test "inline conf values" {
+    const allocator = std.testing.allocator;
+    var arena: std.heap.ArenaAllocator = .init(allocator);
+    defer arena.deinit();
+
+    const io = std.testing.io;
+
+    var emap = try std.testing.environ.createMap(arena.allocator());
+    defer emap.deinit();
+
+    const conf: Conf = .{ .emap = &emap };
+    const conf_file: ConfFile = .{ .nspace = .{ .nspace = .{ .config = .internal }, .pfix = .{ .config_internal = ".test" } }, .sub_path = "test.env" };
+
+    try conf.set(conf_file, "key1", "fooooo", arena.allocator(), io);
+    try conf.set(conf_file, "key3", "baar", arena.allocator(), io);
+    try conf.set(conf_file, "key2", "owo", arena.allocator(), io);
+    try conf.set(conf_file, "key3", "third_key", arena.allocator(), io);
+
+    const val1 = (try conf.get(conf_file, "key2", arena.allocator(), io)).?;
+    const val2 = (try conf.get(conf_file, "key1", arena.allocator(), io)).?;
+    const val3 = (try conf.get(conf_file, "key3", arena.allocator(), io)).?;
+
+    try std.testing.expectEqualStrings("owo", val1);
+    try std.testing.expectEqualStrings("fooooo", val2);
+    try std.testing.expectEqualStrings("third_key", val3);
 }

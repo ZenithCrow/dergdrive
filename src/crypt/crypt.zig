@@ -1,5 +1,7 @@
 const std = @import("std");
 pub const AesAlgo = std.crypto.aead.aes_gcm.Aes256Gcm;
+pub const SignAlgo = std.crypto.sign.Ed25519;
+pub const KeyxchAlgo = std.crypto.dh.X25519;
 
 pub const salt_lenght = 8;
 pub const key_length = 32;

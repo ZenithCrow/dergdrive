@@ -34,14 +34,14 @@ pub fn nextMsg(self: *ZeroTrustMsgIterator, reader: *std.Io.Reader) std.Io.Reade
 
         self.seek = 0;
         self.end = 0;
-        self.pull(reader);
+        try self.pull(reader);
     }
 
     if (self.seek + msg_len > self.buf.len)
         self.rebase();
 
     while (self.seek + msg_len > self.end)
-        self.pull(reader);
+        try self.pull(reader);
 
     const msg_start = self.seek;
     self.seek += msg_len;
@@ -50,7 +50,8 @@ pub fn nextMsg(self: *ZeroTrustMsgIterator, reader: *std.Io.Reader) std.Io.Reade
 }
 
 fn pull(self: *ZeroTrustMsgIterator, reader: *std.Io.Reader) std.Io.Reader.Error!void {
-    self.end += try reader.readVec(&.{self.buf[self.end..]});
+    var vec = [_][]u8{self.buf[self.end..]};
+    self.end += try reader.readVec(&vec);
 }
 
 fn rebase(self: *ZeroTrustMsgIterator) void {

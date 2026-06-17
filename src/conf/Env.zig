@@ -224,7 +224,7 @@ test "client env config" {
         try env.set("owo", "uwu", .{ .nspace = .{ .nspace = .{ .config = .global }, .pfix = pfix }, .sub_path = "cowonfig.env" });
         try std.testing.expectEqualStrings("uwu", env.get("owo").?);
 
-        try env.set("yay", weird_value, .{ .nspace = .{ .nspace = .{ .config = .user }, .pfix = pfix }, .sub_path = "config.ini" });
+        try env.set("yay", weird_value, .{ .nspace = .{ .nspace = .{ .config = .user }, .pfix = pfix }, .sub_path = "config" });
         try std.testing.expectEqualStrings(weird_value, env.get("yay").?);
 
         try env.set("override me", "overridden", null);
