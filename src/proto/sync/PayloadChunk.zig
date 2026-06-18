@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const Chunk = @import("Chunk.zig");
 
 const PayloadChunk = @This();
@@ -9,7 +10,7 @@ pub const content_size = 0; // variable size
 back_chunk: Chunk,
 payload: []u8,
 
-pub inline fn fromChunk(chunk: Chunk) PayloadChunk {
+pub fn fromChunk(chunk: Chunk) PayloadChunk {
     return .{
         .back_chunk = chunk,
         .payload = chunk.data,

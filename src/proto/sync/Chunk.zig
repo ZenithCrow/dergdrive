@@ -2,7 +2,9 @@ const std = @import("std");
 
 const BreakChunk = @import("BreakChunk.zig");
 const DestChunk = @import("DestChunk.zig");
+const EncryptedPayloadChunk = @import("EncryptedPayloadChunk.zig");
 const header = @import("header.zig");
+const KeyXchgChunk = @import("KeyXchgChunk.zig");
 const PayloadChunk = @import("PayloadChunk.zig");
 const RequestChunk = @import("RequestChunk.zig");
 const SyncMessage = @import("SyncMessage.zig");
@@ -30,6 +32,8 @@ pub const ChunkType = enum {
     destination,
     payload,
     @"break",
+    encrypted_payload,
+    key_xchg,
 
     pub const Error = error{
         UnknownChunkType,
@@ -47,6 +51,8 @@ pub const ChunkType = enum {
             packedString(DestChunk.header_title.*) => .destination,
             packedString(PayloadChunk.header_title.*) => .payload,
             packedString(BreakChunk.header_title.*) => .@"break",
+            packedString(EncryptedPayloadChunk.header_title.*) => .encrypted_payload,
+            packedString(KeyXchgChunk.header_title.*) => .key_xchg,
             else => Error.UnknownChunkType,
         };
     }
@@ -62,6 +68,10 @@ pub const ReadError = error{
 
 pub const CreateError = error{
     InsufficientBufferSpace,
+};
+
+pub const CastError = error{
+    InsufficientDataLen,
 };
 
 chunk_type: ChunkType,
@@ -95,7 +105,7 @@ pub fn readChunk(buffer: []u8) ReadError!Chunk {
     };
 }
 
-pub fn createChunk(comptime ChunkT: type, buf: []u8) CreateError!ChunkT {
+fn validateChunkType(comptime ChunkT: type) void {
     comptime switch (@typeInfo(ChunkT)) {
         .@"struct" => |struc| {
             for (struc.decls) |decl| {
@@ -109,6 +119,13 @@ pub fn createChunk(comptime ChunkT: type, buf: []u8) CreateError!ChunkT {
         },
         else => @compileError("ChunkT must be a struct type"),
     };
+
+    if (!std.meta.hasFn(ChunkT, "fromChunk"))
+        @compileError("missing fromChunk function on type " ++ @typeName(ChunkT));
+}
+
+pub fn createChunk(comptime ChunkT: type, buf: []u8) CreateError!ChunkT {
+    comptime validateChunkType(ChunkT);
 
     const chunk_buf_size = header.header_size + ChunkT.content_size;
     if (buf.len < chunk_buf_size)
@@ -124,11 +141,14 @@ pub fn createChunk(comptime ChunkT: type, buf: []u8) CreateError!ChunkT {
     std.mem.copyForwards(u8, chunk.header_buf[0..header.header_title_size], ChunkT.header_title);
     chunk.updateSizeHeader();
 
-    return chunk.as(ChunkT);
+    return chunk.as(ChunkT) catch unreachable;
 }
 
-pub fn as(chunk: Chunk, comptime ChunkT: type) ChunkT {
-    if (std.meta.hasFn(ChunkT, "fromChunk")) {
-        return ChunkT.fromChunk(chunk);
-    } else @compileError("missing fromChunk function on type " ++ @typeName(ChunkT));
+pub fn as(chunk: Chunk, comptime ChunkT: type) CastError!ChunkT {
+    comptime validateChunkType(ChunkT);
+
+    if (chunk.data.len < ChunkT.content_size)
+        return CastError.InsufficientDataLen;
+
+    return ChunkT.fromChunk(chunk);
 }
