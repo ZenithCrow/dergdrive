@@ -27,7 +27,7 @@ pub const command: cli.Command = .{
             stdout_w.interface.flush() catch return ExecError.ReturnStatusFailure;
         }
     }.execFn,
-    .options = &.{},
+    .options = &.{ver_only_opt},
 };
 
 const ver_only_opt: cli.Option = .{

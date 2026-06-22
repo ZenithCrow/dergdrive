@@ -187,7 +187,7 @@ pub fn printHelp(io: std.Io) void {
 
 pub fn printCmdHelp(cmd: Command, io: std.Io) void {
     std.log.info(param_notice, .{});
-    std.log.info("Usage: {s} {s}", .{ prog_name, cmd.usage });
+    std.log.info("Usage: {s} {s} [OPTIONS]", .{ prog_name, cmd.usage });
 
     var stderr_w = std.Io.File.stderr().writerStreaming(io, &stderr_w_buf);
     stderr_w.interface.print(
