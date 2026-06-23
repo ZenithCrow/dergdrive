@@ -10,6 +10,7 @@ pub const cli = struct {
         pub const @"ls-include" = @import("cli/commands/ls-include.zig");
         pub const @"test-pipe" = @import("cli/commands/test-pipe.zig");
         pub const @"test-sync" = @import("cli/commands/test-sync.zig");
+        pub const @"probe-server" = @import("cli/commands/probe-server.zig");
     };
 
     pub const options = struct {

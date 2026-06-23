@@ -54,20 +54,20 @@ const mode_opt: cli.Option = .{
 };
 
 const only_include_opt: cli.Option = .{
-    .long = "--hide-include",
+    .long = "--only-included",
     .short = 'c',
     .desc = "Only show included files in traverse mode",
 };
 
 const only_ignore_opt: cli.Option = .{
-    .long = "--hide-ignore",
+    .long = "--only-ignored",
     .short = 'g',
     .desc = "Only show ignored files in traverse mode",
 };
 
 const list_ignore_opt: cli.Option = .{
-    .long = "--list-ignore",
-    .short = 'l',
+    .long = "--travs-ignored",
+    .short = 't',
     .desc = "Traverse and list directories whose contents are all ignored",
 };
 

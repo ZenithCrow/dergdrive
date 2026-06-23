@@ -244,3 +244,7 @@ pub fn printCmdHelp(cmd: Command, io: std.Io) void {
 pub fn getCliThenConfigValue(env: *const dergdrive.conf.Env, config_opt_name: []const u8, args: []const []const u8, cli_opt: Option) ?[]const u8 {
     return if (parser.getAssociatedValue(args, cli_opt.long, cli_opt.short, (cli_opt.value orelse return null).eql_sign)) |v| v else if (env.get(config_opt_name)) |v| v else null;
 }
+
+pub fn cliOptOverridesConfigOptDesc(comptime config_opt_name: []const u8) []const u8 {
+    return "When this option is not used, value of '" ++ config_opt_name ++ "' config option will be used if it is set.";
+}
