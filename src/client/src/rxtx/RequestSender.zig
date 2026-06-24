@@ -13,16 +13,17 @@ const log = std.log.scoped(.@"client/transmit/RequestSender");
 
 const RequestSender = @This();
 
-//tcp_cli: *TcpClient,
 req_stor: *RequestStorage,
 enc_file_reqs: *pipe_adapter.RequestPipeAdapter,
 prio_request: PrioRequest,
 send_task: ?std.Io.Future(std.Io.Cancelable!void) = null,
+net_writer: *std.Io.Writer,
 
-pub fn init(req_stor: *RequestStorage, enc_file_reqs: *pipe_adapter.RequestPipeAdapter, allocator: std.mem.Allocator) std.mem.Allocator.Error!RequestSender {
+pub fn init(req_stor: *RequestStorage, enc_file_reqs: *pipe_adapter.RequestPipeAdapter, net_writer: *std.Io.Writer, allocator: std.mem.Allocator) std.mem.Allocator.Error!RequestSender {
     return .{
         .req_stor = req_stor,
         .enc_file_reqs = enc_file_reqs,
+        .net_writer = net_writer,
         .prio_request = .{
             .request_buf = try .init(allocator),
         },
@@ -73,10 +74,13 @@ pub fn signalPriorityRequest(self: *RequestSender, io: std.Io) void {
     const old_cancel_protection = io.swapCancelProtection(.blocked);
     defer _ = io.swapCancelProtection(old_cancel_protection);
 
-    self.enc_file_reqs.idx_lock.lock(io) catch unreachable;
-    defer self.enc_file_reqs.idx_lock.unlock(io);
+    {
+        self.enc_file_reqs.idx_lock.lock(io) catch unreachable;
+        defer self.enc_file_reqs.idx_lock.unlock(io);
 
-    self.enc_file_reqs.avail_idx = @truncate(self.enc_file_reqs.cryptors.len);
+        self.enc_file_reqs.avail_idx = @truncate(self.enc_file_reqs.cryptors.len);
+    }
+
     self.enc_file_reqs.avail_cond.signal(io);
 }
 
@@ -139,12 +143,8 @@ fn sendLoop(self: *RequestSender, io: std.Io) std.Io.Cancelable!void {
         const req_buf = try self.readBuf(io);
         defer self.finishReadBuf(req_buf, io);
 
-        log.debug("sending {d} bytes", .{req_buf.len});
-        log.info("sent file", .{});
-
-        // self.tcp_cli.sendAll(req_buf) catch {
-        //     //  TODO: handle error
-        //     std.log.err("sending file failed", .{});
-        // };
+        self.net_writer.writeAll(req_buf) catch {
+            log.err("Couldn't send.", .{});
+        };
     }
 }

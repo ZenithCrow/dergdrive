@@ -2,12 +2,12 @@ const std = @import("std");
 
 const dergdrive = @import("dergdrive");
 const cli = dergdrive.cli;
-const transmit = dergdrive.client.transmit;
-const FileReader = transmit.FileReader;
-const RequestStorage = transmit.RequestStorage;
-const pipe_adapter = transmit.pipe_adapter;
-const RequestSender = transmit.RequestSender;
-const Cryptor = transmit.Cryptor;
+const rxtx = dergdrive.client.rxtx;
+const FileReader = rxtx.FileReader;
+const RequestStorage = rxtx.RequestStorage;
+const pipe_adapter = rxtx.pipe_adapter;
+const RequestSender = rxtx.RequestSender;
+const Cryptor = rxtx.Cryptor;
 
 const log = std.log.scoped(.@"client/cli/commands/test-pipe");
 
@@ -33,10 +33,22 @@ fn testPipe(args: []const []const u8, emap: *const std.process.Environ.Map, allo
     var req_stor: RequestStorage = .init;
     defer req_stor.deinit(allocator);
 
-    var raw_pa: pipe_adapter.RawFilePipeAdapter = .init;
-    var req_pa: pipe_adapter.RequestPipeAdapter = .init;
+    var raw_pa: pipe_adapter.RawFilePipeAdapter = .empty;
+    var req_pa: pipe_adapter.RequestPipeAdapter = .empty;
 
-    var req_sender: RequestSender = try .init(&req_stor, &req_pa, allocator);
+    const writer_vtable: std.Io.Writer.VTable = .{ .drain = struct {
+        const w_log = std.log.scoped(.@"client/cli/commands/test-pipe/log_writer");
+        pub fn drain(_: *std.Io.Writer, data: []const []const u8, _: usize) std.Io.Writer.Error!usize {
+            var len_sum: usize = 0;
+            for (data) |d| len_sum += d.len;
+
+            w_log.debug("sent {d} bytes", .{len_sum});
+            return len_sum;
+        }
+    }.drain };
+    var writer: std.Io.Writer = .{ .buffer = &.{}, .vtable = &writer_vtable };
+
+    var req_sender: RequestSender = try .init(&req_stor, &req_pa, &writer, allocator);
     defer req_sender.deinit(allocator);
 
     var file_reader: FileReader = .{

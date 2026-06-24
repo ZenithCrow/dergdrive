@@ -6,11 +6,12 @@ const include_rules_opt = options.@"include-rules";
 const vol_opt = options.vol;
 const client_cli = client.cli;
 const command_exec = client_cli.command_exec;
+const service = client_cli.service;
 const dergdrive = @import("dergdrive");
 const cli = dergdrive.cli;
 const IncludeTree = dergdrive.client.track.IncludeTree;
 const FileRecordMap = dergdrive.client.track.FileRecordMap;
-const FileReader = dergdrive.client.transmit.FileReader;
+const FileReader = dergdrive.client.rxtx.FileReader;
 const SyncOp = dergdrive.client.track.SyncOp;
 const unit_sync = dergdrive.client.track.unit_sync;
 const root_dir_opt = dergdrive.cli.options.@"root-dir";
@@ -40,10 +41,10 @@ pub const command: cli.Command = .{
 };
 
 fn testSync(args: []const []const u8, emap: *std.process.Environ.Map, allocator: std.mem.Allocator, io: std.Io) !void {
-    const ctx: command_exec.ParamContext = try .init(args, emap, allocator, io);
+    const ctx: service.ParamContext = try .init(args, emap, allocator, io);
     defer ctx.deinit(allocator);
 
-    var param_vals: command_exec.ParamContextValues = try .init(ctx, allocator, io);
+    var param_vals: service.ParamContextValues = try .init(ctx, allocator, io);
     defer param_vals.deinit(allocator, io);
     // beyond this point, `root_path` and `include_rules_path` are not null
 

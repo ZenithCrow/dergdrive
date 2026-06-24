@@ -1,12 +1,17 @@
 const std = @import("std");
 const Environ = std.process.Environ;
+const net = std.Io.net;
 
 const client = @import("client");
 const options = client.cli.options;
 const client_cli = client.cli;
 const command_exec = client_cli.command_exec;
+const server_opt = options.server;
+const service = client_cli.service;
 const dergdrive = @import("dergdrive");
 const cli = dergdrive.cli;
+const root_cmd_exec = cli.command_exec;
+const port_opt = cli.options.port;
 
 const log = std.log.scoped(.@"client/cli/commands/probe-server");
 
@@ -28,30 +33,10 @@ pub const command: cli.Command = .{
     }.execFn,
     .options = &.{
         options.vol.option,
-        server_opt,
-        port_opt,
+        server_opt.option,
+        port_opt.option,
         print_pubkey_opt,
         print_server_version_opt,
-    },
-};
-
-const server_opt: cli.Option = .{
-    .long = "--server",
-    .short = 's',
-    .desc = "The server to connect to. Can be a domain name or an IPv4/IPv6 address. " ++ cli.command_exec.cliOptOverridesConfigOptDesc("server_addr") ++ " To specify port, use the '--port' option.",
-    .value = .{
-        .eql_sign = false,
-        .name = "ADDRESS",
-    },
-};
-
-const port_opt: cli.Option = .{
-    .long = "--port",
-    .short = 'p',
-    .desc = "The server port. " ++ cli.command_exec.cliOptOverridesConfigOptDesc("server_port"),
-    .value = .{
-        .eql_sign = false,
-        .name = "PORT",
     },
 };
 
@@ -66,6 +51,10 @@ const print_server_version_opt: cli.Option = .{
 };
 
 fn probeServer(args: []const []const u8, emap: *Environ.Map, gpa: std.mem.Allocator, io: std.Io) !void {
-    const ctx: command_exec.ParamContext = try .init(args, emap, gpa, io);
+    const ctx: service.ParamContext = try .init(args, emap, gpa, io);
     defer ctx.deinit(gpa);
+
+    var stream = try service.connect(ctx, io);
+
+    _ = &stream;
 }

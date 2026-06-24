@@ -5,6 +5,7 @@ pub const SecAuth = @import("SecAuth.zig");
 
 pub const cli = struct {
     pub const command_exec = @import("cli/command_exec.zig");
+    pub const service = @import("cli/service.zig");
 
     pub const commands = struct {
         pub const @"ls-include" = @import("cli/commands/ls-include.zig");
@@ -16,6 +17,7 @@ pub const cli = struct {
     pub const options = struct {
         pub const @"include-rules" = @import("cli/options/include-rules.zig");
         pub const vol = @import("cli/options/vol.zig");
+        pub const server = @import("cli/options/server.zig");
     };
 };
 
@@ -27,16 +29,16 @@ pub const track = struct {
     pub const unit_sync = @import("track/unit_sync.zig");
 };
 
-pub const transmit = struct {
-    pub const ChunkBuffer = @import("transmit/ChunkBuffer.zig");
-    pub const Cryptor = @import("transmit/Cryptor.zig");
-    pub const FileReader = @import("transmit/FileReader.zig");
-    pub const RawFileChunkBuffer = @import("transmit/RawFileChunkBuffer.zig");
-    pub const RequestChunkBuffer = @import("transmit/RequestChunkBuffer.zig");
-    pub const RequestSender = @import("transmit/RequestSender.zig");
-    pub const RequestStorage = @import("transmit/RequestStorage.zig");
-    pub const pipe_adapter = @import("transmit/pipe_adapter.zig");
-    pub const PrioRequest = @import("transmit/PrioRequest.zig");
+pub const rxtx = struct {
+    pub const ChunkBuffer = @import("rxtx/ChunkBuffer.zig");
+    pub const Cryptor = @import("rxtx/Cryptor.zig");
+    pub const FileReader = @import("rxtx/FileReader.zig");
+    pub const RawFileChunkBuffer = @import("rxtx/RawFileChunkBuffer.zig");
+    pub const RequestChunkBuffer = @import("rxtx/RequestChunkBuffer.zig");
+    pub const RequestSender = @import("rxtx/RequestSender.zig");
+    pub const RequestStorage = @import("rxtx/RequestStorage.zig");
+    pub const pipe_adapter = @import("rxtx/pipe_adapter.zig");
+    pub const PrioRequest = @import("rxtx/PrioRequest.zig");
 };
 
 test {

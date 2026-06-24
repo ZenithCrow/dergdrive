@@ -21,9 +21,9 @@ pub fn PipeAdapter(comptime raw_side: bool) type {
         idx_lock: std.Io.Mutex,
         avail_cond: std.Io.Condition,
 
-        pub const init: @This() = .{
+        pub const empty: @This() = .{
             .cryptors = &.{},
-            .avail_idx = 0,
+            .avail_idx = invalid_index,
             .idx_lock = .init,
             .avail_cond = .init,
         };

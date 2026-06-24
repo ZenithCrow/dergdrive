@@ -3,7 +3,7 @@ const Dir = std.Io.Dir;
 const File = std.Io.File;
 
 const dergdrive = @import("dergdrive");
-const FileReader = dergdrive.client.transmit.FileReader;
+const FileReader = dergdrive.client.rxtx.FileReader;
 
 const FileRecordMap = @import("FileRecordMap.zig");
 const IncludeTree = @import("IncludeTree.zig");

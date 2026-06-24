@@ -18,7 +18,7 @@ jobs:
           version: latest
 
       - name: Build
-        run: zig build
+        run: zig build -Dserver
 
       - name: Test
-        run: zig build test
+        run: zig build -Dserver test
