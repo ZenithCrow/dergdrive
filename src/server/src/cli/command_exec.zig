@@ -95,7 +95,7 @@ pub const ParamContextValues = struct {
 
     pub fn init(ctx: ParamContext, io: std.Io) !ParamContextValues {
         const root_path = if (ctx.root_path) |v| v else {
-            log.err(Option.opt_not_set_template, .{ "Root directory", @"root-dir_opt".root_dir_opt_name, @"root-dir_opt".option.long });
+            log.err(@"root-dir_opt".option.notSetErrorMsg("Root directory"), .{});
             return error.RootDirNotSet;
         };
 
