@@ -189,7 +189,7 @@ test "client env config" {
     var emap = try std.testing.environ.createMap(arena);
     defer emap.deinit();
 
-    var conf: client.conf.Conf = .init("vol1", &emap);
+    var conf: client.Conf = .init("vol1", &emap);
     var hierarchy = try allocator.dupe(Conf.ConfFile, conf.root_conf.conf_file_hierarchy);
     defer allocator.free(hierarchy);
 

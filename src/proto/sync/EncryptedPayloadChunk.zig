@@ -18,8 +18,8 @@ enc_payload: []u8,
 pub fn fromChunk(chunk: Chunk) EncryptedPayloadChunk {
     return .{
         .back_chunk = chunk,
-        .nonce = chunk.data[0..crypt.AesAlgo.nonce_length],
-        .auth_tag = chunk.data[crypt.AesAlgo.nonce_length .. crypt.AesAlgo.nonce_length + crypt.AesAlgo.tag_length],
+        .nonce = chunk.data[0..crypt.AesAlgo.nonce_length].*,
+        .auth_tag = chunk.data[crypt.AesAlgo.nonce_length .. crypt.AesAlgo.nonce_length + crypt.AesAlgo.tag_length].*,
         .enc_payload = chunk.data[content_size..],
     };
 }

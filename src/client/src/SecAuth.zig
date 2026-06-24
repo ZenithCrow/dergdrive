@@ -27,7 +27,7 @@ pub fn verifyDHXchgPubKeyAuthenticity(
     io: std.Io,
 ) VerifyError!void {
     out_verified.* = false;
-    try signature.verifyStrict(&dh_xchg_key, .fromBytes(pub_key));
+    try signature.verifyStrict(&dh_xchg_key, try .fromBytes(pub_key));
     out_verified.* = true;
 
     const host = conf.root_conf.get(conf.known_hosts, address_name, allocator, io) catch |err| {

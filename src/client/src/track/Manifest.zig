@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const client = @import("client");
-const Conf = client.conf.Conf;
+const Conf = client.Conf;
 const dergdrive = @import("dergdrive");
 const crypt = dergdrive.crypt;
 const slc = dergdrive.util.slc;
