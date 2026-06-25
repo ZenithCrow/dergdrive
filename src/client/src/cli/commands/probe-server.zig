@@ -8,6 +8,7 @@ const client_cli = client.cli;
 const command_exec = client_cli.command_exec;
 const server_opt = options.server;
 const service = client_cli.service;
+const rxtx = client.rxtx;
 const dergdrive = @import("dergdrive");
 const cli = dergdrive.cli;
 const root_cmd_exec = cli.command_exec;
@@ -55,6 +56,23 @@ fn probeServer(args: []const []const u8, emap: *Environ.Map, gpa: std.mem.Alloca
     defer ctx.deinit(gpa);
 
     var stream = try service.connect(ctx, io);
+    defer stream.close(io);
 
-    _ = &stream;
+    var writer = stream.writer(io, &.{});
+    var reader = stream.reader(io, &.{});
+
+    var req_stor: rxtx.RequestStorage = .init;
+
+    var tailpiece_request_pa: rxtx.pipe_adapter.RequestPipeAdapter = .empty;
+    var request_sender: rxtx.RequestSender = try .init(&tailpiece_request_pa, &writer.interface, &req_stor, gpa);
+    defer request_sender.deinit(gpa);
+
+    var reqest_receiver: rxtx.RequestReceiver = try .init(&reader.interface, &req_stor, gpa);
+    defer reqest_receiver.deinit(gpa);
+
+    try request_sender.start(io);
+    defer request_sender.stop(io);
+
+    try reqest_receiver.start(io);
+    defer reqest_receiver.stop(io);
 }

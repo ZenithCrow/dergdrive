@@ -59,13 +59,6 @@ fn pipeFileErrorNowrap(self: *FileReader, file: File, pipe_info: PipeInfo, gpa: 
     var idx_sent: usize = 0;
 
     while (piped_size < file_size) : (idx_sent += 1) {
-        {
-            try self.req_stor.reqs_complete_lock.lock(io);
-            defer self.req_stor.reqs_complete_lock.unlock(io);
-
-            self.req_stor.reqs_piped += 1;
-        }
-
         const rf_chunk_buf: *RawFileChunkBuffer = try self.raw_file_adapter.claimChunkBuf(.write, io);
         log.debug("claimed chunk buffer", .{});
         defer {

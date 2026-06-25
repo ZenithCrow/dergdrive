@@ -13,20 +13,23 @@ const log = std.log.scoped(.@"client/transmit/RequestSender");
 
 const RequestSender = @This();
 
-req_stor: *RequestStorage,
 enc_file_reqs: *pipe_adapter.RequestPipeAdapter,
 prio_request: PrioRequest,
+writer: *std.Io.Writer,
+req_stor: *RequestStorage,
 send_task: ?std.Io.Future(std.Io.Cancelable!void) = null,
-net_writer: *std.Io.Writer,
+has_error: bool = false,
+error_lock: std.Io.Mutex = .init,
+error_cond: std.Io.Condition = .init,
 
-pub fn init(req_stor: *RequestStorage, enc_file_reqs: *pipe_adapter.RequestPipeAdapter, net_writer: *std.Io.Writer, allocator: std.mem.Allocator) std.mem.Allocator.Error!RequestSender {
+pub fn init(enc_file_reqs: *pipe_adapter.RequestPipeAdapter, writer: *std.Io.Writer, req_stor: *RequestStorage, allocator: std.mem.Allocator) std.mem.Allocator.Error!RequestSender {
     return .{
-        .req_stor = req_stor,
         .enc_file_reqs = enc_file_reqs,
-        .net_writer = net_writer,
+        .writer = writer,
         .prio_request = .{
             .request_buf = try .init(allocator),
         },
+        .req_stor = req_stor,
     };
 }
 
@@ -126,25 +129,23 @@ fn finishReadBuf(self: *RequestSender, used_buf: []u8, io: std.Io) void {
 
 fn sendLoop(self: *RequestSender, io: std.Io) std.Io.Cancelable!void {
     while (true) {
-        defer {
-            {
-                const old_cancel_protection = io.swapCancelProtection(.blocked);
-                defer _ = io.swapCancelProtection(old_cancel_protection);
-
-                self.req_stor.reqs_complete_lock.lock(io) catch unreachable;
-                defer self.req_stor.reqs_complete_lock.unlock(io);
-
-                self.req_stor.reqs_complete += 1;
-            }
-
-            self.req_stor.reqs_complete_cond.signal(io);
-        }
-
         const req_buf = try self.readBuf(io);
         defer self.finishReadBuf(req_buf, io);
 
-        self.net_writer.writeAll(req_buf) catch {
-            log.err("Couldn't send.", .{});
+        self.writer.writeAll(req_buf) catch |err| {
+            log.warn("Couldn' to writer writer due to error: {t}.", .{err});
+
+            try self.error_lock.lock(io);
+            defer self.error_lock.unlock(io);
+
+            self.has_error = true;
+            self.req_stor.broadcastSubsystemFail(io);
+
+            // wait until acknowledged by the main thread which determines the error recoverability
+            while (self.has_error == true)
+                try self.error_cond.wait(io, &self.error_lock);
+
+            continue;
         };
     }
 }

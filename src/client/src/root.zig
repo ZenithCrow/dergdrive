@@ -35,6 +35,7 @@ pub const rxtx = struct {
     pub const FileReader = @import("rxtx/FileReader.zig");
     pub const RawFileChunkBuffer = @import("rxtx/RawFileChunkBuffer.zig");
     pub const RequestChunkBuffer = @import("rxtx/RequestChunkBuffer.zig");
+    pub const RequestReceiver = @import("rxtx/RequestReceiver.zig");
     pub const RequestSender = @import("rxtx/RequestSender.zig");
     pub const RequestStorage = @import("rxtx/RequestStorage.zig");
     pub const pipe_adapter = @import("rxtx/pipe_adapter.zig");

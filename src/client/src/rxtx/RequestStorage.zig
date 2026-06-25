@@ -5,10 +5,13 @@ const sync = dergdrive.proto.sync;
 const RequestChunk = sync.RequestChunk;
 const shared_slice = dergdrive.util.shared_slice;
 const FileRecordMap = dergdrive.client.track.FileRecordMap;
+const Chunk = sync.Chunk;
 
 const RawFileChunkBuffer = @import("RawFileChunkBuffer.zig");
 
 const RequestStorage = @This();
+
+pub const WaitForError = error{ SubsystemFail, QueueFull } || std.Io.Cancelable;
 
 pub const Query = union(RequestChunk.RequestType) {
     vol_add,
@@ -37,7 +40,7 @@ pub const Query = union(RequestChunk.RequestType) {
     unit_abort: struct {
         file_req_ids: []const RequestChunk.IdT,
     },
-    trans_abort: void,
+    trans_abort,
 };
 
 pub const Response = union(RequestChunk.RequestType) {
@@ -51,10 +54,21 @@ pub const Response = union(RequestChunk.RequestType) {
     chunk_update: struct {
         reloc: sync.DestChunk.Query,
     },
-    chunks_fetch: void,
-    chunks_del: void,
-    unit_abort: void,
-    trans_abort: void,
+    chunks_fetch,
+    chunks_del,
+    unit_abort,
+    trans_abort,
+};
+
+pub const HeadlessResponse = union(Chunk.ChunkType) {
+    sync_message,
+    request,
+    destination,
+    payload,
+    @"break",
+    encrypted_payload,
+    key_xchg: sync.KeyXchgChunk,
+    version: sync.VersionChunk,
 };
 
 pub const Request = struct {
@@ -66,26 +80,131 @@ pub const Request = struct {
     finished: bool = false,
 };
 
+pub const WQResultIdentifier = enum {
+    by_id,
+    by_resp_type,
+};
+
+pub const WaitQuery = struct {
+    received: bool,
+    result: union(WQResultIdentifier) {
+        by_id: RequestChunk.IdT,
+        by_resp_type: HeadlessResponse,
+    },
+};
+
+pub const WaitQueryVec = struct {
+    vec: []WaitQuery,
+    state_changes: usize = 0,
+};
+
+const wait_q_vecs_capacity = 4;
+
 id_supply: RequestChunk.IdSupplier(.client),
 reqs: std.array_hash_map.Auto(RequestChunk.IdT, Request),
 string_stor: shared_slice.SharedStringStorage,
-lock: std.Io.Mutex,
+req_stor_lock: std.Io.Mutex,
 
-reqs_piped: usize = 0,
-reqs_complete: usize = 0,
-reqs_complete_lock: std.Io.Mutex = .init,
-reqs_complete_cond: std.Io.Condition = .init,
+wait_q_vecs: [wait_q_vecs_capacity]?*WaitQueryVec,
+subsystem_fail: bool,
+wait_q_lock: std.Io.Mutex,
+wait_q_cond: std.Io.Condition,
 
-pub const init: @This() = .{
+pub const init: RequestStorage = .{
     .id_supply = .init,
     .reqs = .empty,
     .string_stor = .empty,
-    .lock = .init,
+    .req_stor_lock = .init,
+    .wait_q_vecs = blk: {
+        var empty: [wait_q_vecs_capacity]?*WaitQueryVec = undefined;
+        for (&empty) |*e| {
+            e.* = null;
+        }
+        break :blk empty;
+    },
+    .wait_q_lock = .init,
+    .subsystem_fail = false,
+    .wait_q_cond = .init,
 };
 
-pub fn deinit(self: *@This(), gpa: std.mem.Allocator) void {
+pub fn deinit(self: *RequestStorage, gpa: std.mem.Allocator) void {
     self.reqs.deinit(gpa);
     self.string_stor.deinitAll(gpa);
+}
+
+pub fn waitFor(self: *RequestStorage, wqv: *WaitQueryVec, io: std.Io, out_state_changes: *usize) WaitForError!void {
+    try self.wait_q_lock.lock(io);
+    defer self.wait_q_lock.unlock(io);
+
+    const idx = for (&self.wait_q_vecs, 0..) |vec, i| {
+        if (vec == null)
+            break i;
+    } else return WaitForError.QueueFull;
+
+    self.wait_q_vecs[idx] = wqv;
+
+    while (!self.subsystem_fail and wqv.state_changes == 0)
+        try self.wait_q_cond.wait(io, &self.wait_q_lock);
+
+    out_state_changes.* = wqv.state_changes;
+    self.wait_q_vecs[idx] = null;
+
+    if (self.subsystem_fail)
+        return WaitForError.SubsystemFail;
+}
+
+pub fn broadcastSubsystemFail(self: *RequestStorage, io: std.Io) void {
+    {
+        self.wait_q_lock.lockUncancelable(io);
+        defer self.wait_q_lock.unlock(io);
+
+        self.subsystem_fail = true;
+    }
+
+    self.wait_q_cond.broadcast(io);
+}
+
+pub fn broadcastReceived(
+    self: *RequestStorage,
+    identifier: union(WQResultIdentifier) {
+        by_id: RequestChunk.IdT,
+        by_resp_type: HeadlessResponse,
+    },
+    io: std.Io,
+) void {
+    var broadcast: bool = false;
+
+    {
+        self.wait_q_lock.lockUncancelable(io);
+        defer self.wait_q_lock.unlock(io);
+
+        for (self.wait_q_vecs) |vec| {
+            if (vec) |v| {
+                for (v.vec) |*wq| {
+                    if (std.meta.activeTag(wq.result) == std.meta.activeTag(identifier)) {
+                        if (switch (wq.result) {
+                            .by_id => |id| id == identifier.by_id,
+                            .by_resp_type => |*rt| blk: {
+                                if (std.meta.activeTag(rt.*) == std.meta.activeTag(identifier.by_resp_type)) {
+                                    rt.* = identifier.by_resp_type;
+                                    break :blk true;
+                                }
+
+                                break :blk false;
+                            },
+                        }) {
+                            wq.received = true;
+                            broadcast = true;
+                            v.state_changes += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (broadcast)
+        self.wait_q_cond.broadcast(io);
 }
 
 fn createChunkReq(
@@ -99,8 +218,8 @@ fn createChunkReq(
         .chunk_new, .chunk_update, .chunks_del, .chunks_fetch => {
             const req_id = self.id_supply.takeId(io);
 
-            self.lock.lockUncancelable(io);
-            defer self.lock.unlock(io);
+            self.req_stor_lock.lockUncancelable(io);
+            defer self.req_stor_lock.unlock(io);
 
             var sh_str = try self.string_stor.getOrPut(path, gpa);
             var q_mut = query;
@@ -124,8 +243,8 @@ fn createChunkReq(
 }
 
 pub fn removeRequest(self: *RequestStorage, id: RequestChunk.IdT, io: std.Io) ?Request {
-    self.lock.lockUncancelable(io);
-    defer self.lock.unlock(io);
+    self.req_stor_lock.lockUncancelable(io);
+    defer self.req_stor_lock.unlock(io);
 
     const req = self.reqs.get(id);
     _ = self.reqs.swapRemove(id);
@@ -183,8 +302,8 @@ pub fn gatherFileReqIds(
 ) std.mem.Allocator.Error![]const RequestChunk.IdT {
     var id_list: std.ArrayList(RequestChunk.IdT) = .empty;
 
-    self.lock.lockUncancelable(io);
-    defer self.lock.unlock(io);
+    self.req_stor_lock.lockUncancelable(io);
+    defer self.req_stor_lock.unlock(io);
 
     for (self.reqs.values()) |val| {
         switch (val.query) {
@@ -207,8 +326,8 @@ pub fn unitAbortReq(
 ) std.mem.Allocator.Error!RequestChunk.IdT {
     const req_id = self.id_supply.takeId(io);
 
-    self.lock.lockUncancelable(io);
-    defer self.lock.unlock(io);
+    self.req_stor_lock.lockUncancelable(io);
+    defer self.req_stor_lock.unlock(io);
 
     try self.reqs.putNoClobber(gpa, req_id, .{
         .id = req_id,

@@ -172,7 +172,7 @@ pub fn connect(ctx: ParamContext, io: std.Io) !std.Io.net.Stream {
 
     const ip_addr = std.Io.net.IpAddress.parse(server_addr, port_num) catch {
         const host_name = std.Io.net.HostName.init(server_addr) catch |err| {
-            log.err("Invalid hostname: {t}.'", .{err});
+            log.err("Host name could't be resolved: {t}.", .{err});
             return error.InvalidHostname;
         };
 

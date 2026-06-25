@@ -130,8 +130,8 @@ pub fn pipeEncrypted(self: *Cryptor, io: std.Io) std.Io.Cancelable!void {
         defer _ = io.swapCancelProtection(old_cancel_protection);
 
         const req = lock_blk: {
-            self.cluster.request_storage.lock.lockUncancelable(io);
-            defer self.cluster.request_storage.lock.unlock(io);
+            self.cluster.request_storage.req_stor_lock.lockUncancelable(io);
+            defer self.cluster.request_storage.req_stor_lock.unlock(io);
 
             break :lock_blk self.cluster.request_storage.reqs.get(self.raw_file_cbuf.req_id.?).?;
         };

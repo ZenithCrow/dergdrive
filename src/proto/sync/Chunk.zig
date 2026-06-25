@@ -8,6 +8,7 @@ const KeyXchgChunk = @import("KeyXchgChunk.zig");
 const PayloadChunk = @import("PayloadChunk.zig");
 const RequestChunk = @import("RequestChunk.zig");
 const SyncMessage = @import("SyncMessage.zig");
+const VersionChunk = @import("VersionChunk.zig");
 
 pub const Iterator = struct {
     buffer: []u8,
@@ -34,6 +35,7 @@ pub const ChunkType = enum {
     @"break",
     encrypted_payload,
     key_xchg,
+    version,
 
     pub const Error = error{
         UnknownChunkType,
@@ -53,6 +55,7 @@ pub const ChunkType = enum {
             packedString(BreakChunk.header_title.*) => .@"break",
             packedString(EncryptedPayloadChunk.header_title.*) => .encrypted_payload,
             packedString(KeyXchgChunk.header_title.*) => .key_xchg,
+            packedString(VersionChunk.header_title.*) => .version,
             else => Error.UnknownChunkType,
         };
     }
@@ -152,3 +155,5 @@ pub fn as(chunk: Chunk, comptime ChunkT: type) CastError!ChunkT {
 
     return ChunkT.fromChunk(chunk);
 }
+
+pub const parse_err_msg = "Failed to parse {s}: received data buffer is too short.";
