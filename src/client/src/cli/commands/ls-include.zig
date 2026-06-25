@@ -18,7 +18,7 @@ const log = std.log.scoped(.@"client/cli/commands/ls-include");
 
 pub const command: cli.Command = .{
     .name = "ls-include",
-    .usage = "ls-include [OPTIONS]",
+    .usage = "ls-include",
     .desc = "Show a tree of included and/or ignored files in a volume",
     .exec_fn = struct {
         pub fn execFn(args: []const []const u8, emap: *std.process.Environ.Map, allocator: std.mem.Allocator, io: std.Io) cli.Command.ExecError!void {

@@ -8,10 +8,15 @@ const Env = dergdrive.conf.Env;
 const @"root-dir_opt" = dergdrive.cli.options.@"root-dir";
 const Option = dergdrive.cli.Option;
 const parser = dergdrive.cli.parser;
+const server = @import("server");
+const server_cli = server.cli;
+const @"run-pings" = server_cli.commands.@"run-pings";
 
 const log = std.log.scoped(.@"server/cli/command_exec");
 
-pub const command_list: []const Command = &.{};
+pub const command_list: []const Command = &.{
+    @"run-pings".command,
+};
 
 pub fn printServerHelp(io: std.Io) void {
     std.log.info(command_exec_root.param_notice, .{});

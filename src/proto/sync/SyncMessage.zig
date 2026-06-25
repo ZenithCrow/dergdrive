@@ -6,6 +6,8 @@ const RequestChunk = @import("RequestChunk.zig");
 
 const SyncMessage = @This();
 
+const log = std.log.scoped(.@"proto/sync/SyncMessage");
+
 pub const header_title = "dsnc";
 
 // the reserved buffer for this sync message, including header
@@ -54,7 +56,7 @@ pub inline fn updateSizeHeader(self: SyncMessage) Chunk.ReadError!void {
     self.writeSize(try self.dataSize());
 }
 
-pub inline fn resetSizeHeader(self: SyncMessage) void {
+pub inline fn containMsgInSizeHeader(self: SyncMessage) void {
     self.writeSize(@as(header.DataLenT, @truncate(self.msg_buf.len)) - header.header_size);
 }
 

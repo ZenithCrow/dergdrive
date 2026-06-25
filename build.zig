@@ -5,7 +5,8 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const client_fflag = b.option(bool, "client", "Whether to build the client module - default: true") orelse true;
-    const server_fflag = b.option(bool, "server", "Whether to build the server module - default: false") orelse false;
+    //  TODO: this should default to talse
+    const server_fflag = b.option(bool, "server", "Whether to build the server module - default: false") orelse true;
 
     const fflags = b.addOptions();
     fflags.addOption(@TypeOf(client_fflag), "client_fflag", client_fflag);

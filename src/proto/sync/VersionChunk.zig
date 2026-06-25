@@ -34,13 +34,16 @@ pub fn fromChunk(chunk: Chunk) VersionChunk {
     };
 }
 
-pub fn write(self: VersionChunk, version: ?std.SemanticVersion) void {
-    const ver: std.SemanticVersion = version orelse std.SemanticVersion.parse(dergdrive.version) catch unreachable;
+pub fn set(self: *VersionChunk, version: ?std.SemanticVersion) void {
+    self.version = version orelse std.SemanticVersion.parse(dergdrive.version) catch unreachable;
+}
+
+pub fn write(self: VersionChunk) void {
     const encoded: EncodedStruct = .{
-        .major = @truncate(ver.major),
-        .minor = @truncate(ver.minor),
-        .patch = @truncate(ver.patch),
-        .dev = ver.build != null,
+        .major = @truncate(self.version.major),
+        .minor = @truncate(self.version.minor),
+        .patch = @truncate(self.version.patch),
+        .dev = self.version.build != null,
     };
 
     var writer = std.Io.Writer.fixed(self.back_chunk.data[0..content_size]);

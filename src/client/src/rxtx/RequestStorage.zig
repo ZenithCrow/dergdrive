@@ -86,7 +86,7 @@ pub const WQResultIdentifier = enum {
 };
 
 pub const WaitQuery = struct {
-    received: bool,
+    received: bool = false,
     result: union(WQResultIdentifier) {
         by_id: RequestChunk.IdT,
         by_resp_type: HeadlessResponse,

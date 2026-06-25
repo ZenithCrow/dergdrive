@@ -32,7 +32,7 @@ pub fn init(buf: []u8, query: []const FileRecordMap.FileChunk, req_type: sync.Re
 
     _ = sync.Chunk.createChunk(sync.BreakChunk, data_buf) catch {};
 
-    sync_msg.resetSizeHeader();
+    sync_msg.containMsgInSizeHeader();
     sync_msg.updateHeader() catch unreachable;
 
     return .{

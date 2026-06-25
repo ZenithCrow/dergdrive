@@ -46,6 +46,7 @@ pub const proto = struct {
         pub const PayloadChunk = @import("proto/sync/PayloadChunk.zig");
         pub const EncryptedPayloadChunk = @import("proto/sync/EncryptedPayloadChunk.zig");
         pub const VersionChunk = @import("proto/sync/VersionChunk.zig");
+        pub const MsgChunkSnake = @import("proto/sync/MsgChunkSnake.zig");
         pub const KeyXchgChunk = @import("proto/sync/KeyXchgChunk.zig");
         pub const templates = struct {
             pub const UnitAbortMsg = @import("proto/sync/templates/UnitAbortMsg.zig");

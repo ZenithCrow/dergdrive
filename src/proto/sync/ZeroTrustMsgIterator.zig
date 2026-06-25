@@ -35,6 +35,7 @@ pub fn nextMsg(self: *ZeroTrustMsgIterator, reader: *std.Io.Reader) std.Io.Reade
         self.seek = 0;
         self.end = 0;
         try self.pull(reader);
+        log.debug("pulled: '{s}' {any}", .{ self.buf[self.seek..self.end], self.buf[self.seek..self.end] });
     }
 
     if (self.seek + msg_len > self.buf.len)

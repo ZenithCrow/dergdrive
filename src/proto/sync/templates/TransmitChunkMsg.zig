@@ -34,7 +34,7 @@ pub fn init(buf: []u8) InitError!TransmitFileMsg {
 
     tcm.pld_chunk = try sync.Chunk.createChunk(sync.PayloadChunk, data_buf);
 
-    tcm.msg_container.resetSizeHeader();
+    tcm.msg_container.containMsgInSizeHeader();
     tcm.msg_container.updateHeader() catch unreachable;
 
     return tcm;
@@ -54,7 +54,7 @@ pub fn newMsg(self: *TransmitFileMsg, payload_size: u32, req_type: sync.RequestC
 
     self.pld_chunk.claimBuf(self.msg_container.msg_buf[non_payload_size .. non_payload_size + payload_size]);
 
-    self.msg_container.resetSizeHeader();
+    self.msg_container.containMsgInSizeHeader();
     self.msg_container.updateSizeHeader() catch unreachable;
 
     return self.pld_chunk.payload;

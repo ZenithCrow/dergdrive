@@ -29,7 +29,7 @@ pub fn init(buf: []u8, unit_req_ids: []const sync.RequestChunk.IdT, id: sync.Req
     data_buf = data_buf[pld_len..];
     _ = sync.Chunk.createChunk(sync.BreakChunk, data_buf) catch {};
 
-    sync_msg.resetSizeHeader();
+    sync_msg.containMsgInSizeHeader();
     sync_msg.updateHeader() catch unreachable;
 
     return .{

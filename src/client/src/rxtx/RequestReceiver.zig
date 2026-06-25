@@ -38,7 +38,10 @@ pub fn start(self: *RequestReceiver, io: std.Io) std.Io.ConcurrentError!void {
 }
 
 pub fn stop(self: *RequestReceiver, io: std.Io) void {
-    if (self.receive_task) |*t| t.cancel(io) catch {};
+    if (self.receive_task) |*t| {
+        t.cancel(io) catch {};
+        self.receive_task = null;
+    }
 }
 
 fn receiveLoop(self: *RequestReceiver, io: std.Io) std.Io.Cancelable!void {

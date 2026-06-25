@@ -14,7 +14,7 @@ pub fn init(buf: []u8, id: sync.RequestChunk.IdT) Error!TransactionAbortMsg {
     const data_buf = try sync_msg.initRequest(.trans_abort, id);
     _ = sync.Chunk.createChunk(sync.BreakChunk, data_buf) catch {};
 
-    sync_msg.resetSizeHeader();
+    sync_msg.containMsgInSizeHeader();
     sync_msg.updateHeader() catch unreachable;
 
     return .{

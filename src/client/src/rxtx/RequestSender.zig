@@ -9,7 +9,7 @@ const PrioRequest = @import("PrioRequest.zig");
 const RequestChunkBuffer = @import("RequestChunkBuffer.zig");
 const RequestStorage = @import("RequestStorage.zig");
 
-const log = std.log.scoped(.@"client/transmit/RequestSender");
+const log = std.log.scoped(.@"client/rxtx/RequestSender");
 
 const RequestSender = @This();
 
@@ -45,7 +45,10 @@ pub fn start(self: *RequestSender, io: std.Io) std.Io.ConcurrentError!void {
 }
 
 pub fn stop(self: *RequestSender, io: std.Io) void {
-    if (self.send_task) |*t| t.cancel(io) catch {};
+    if (self.send_task) |*t| {
+        t.cancel(io) catch {};
+        self.send_task = null;
+    }
 }
 
 const GetReqBufError = error{InvalidIndex};
@@ -95,9 +98,9 @@ fn readBuf(self: *RequestSender, io: std.Io) std.Io.Cancelable![]u8 {
         self.enc_file_reqs.avail_idx = pipe_adapter.RequestPipeAdapter.invalid_index;
     }
 
-    var i: isize = @bitCast(self.enc_file_reqs.cryptors.len + 1);
-    while (i >= 0) : (i -= 1) {
-        const idx: u8 = if (@as(usize, @bitCast(i)) == self.enc_file_reqs.cryptors.len + 1) try self.waitUntilAvailable(io) else @truncate(@as(usize, @bitCast(i)));
+    var i: isize = @bitCast(self.enc_file_reqs.cryptors.len);
+    while (i >= -1) : (i -= 1) {
+        const idx: u8 = if (i == -1) try self.waitUntilAvailable(io) else @truncate(@as(usize, @bitCast(i)));
         const req_buf_res = self.getReqBuf(idx) catch unreachable;
 
         try req_buf_res.chunk_buf.w_lock.lock(io);
@@ -129,9 +132,11 @@ fn finishReadBuf(self: *RequestSender, used_buf: []u8, io: std.Io) void {
 
 fn sendLoop(self: *RequestSender, io: std.Io) std.Io.Cancelable!void {
     while (true) {
+        log.debug("waiting for req buf to fill..", .{});
         const req_buf = try self.readBuf(io);
         defer self.finishReadBuf(req_buf, io);
 
+        log.debug("sending {d} bytes..", .{req_buf.len});
         self.writer.writeAll(req_buf) catch |err| {
             log.warn("Couldn' to writer writer due to error: {t}.", .{err});
 
@@ -147,5 +152,7 @@ fn sendLoop(self: *RequestSender, io: std.Io) std.Io.Cancelable!void {
 
             continue;
         };
+
+        log.debug("sent", .{});
     }
 }

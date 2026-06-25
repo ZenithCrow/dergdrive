@@ -20,7 +20,7 @@ const log = std.log.scoped(.@"client/cli/commands/test-sync");
 
 pub const command: cli.Command = .{
     .name = "test-sync",
-    .usage = "test-sync [OPTIONS]",
+    .usage = "test-sync",
     .desc = "(debug) Test syncing works as expected.",
     .exec_fn = struct {
         pub fn execFn(args: []const []const u8, emap: *std.process.Environ.Map, allocator: std.mem.Allocator, io: std.Io) cli.Command.ExecError!void {

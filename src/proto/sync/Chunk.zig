@@ -10,6 +10,8 @@ const RequestChunk = @import("RequestChunk.zig");
 const SyncMessage = @import("SyncMessage.zig");
 const VersionChunk = @import("VersionChunk.zig");
 
+const log = std.log.scoped(.@"proto/sync/Chunk");
+
 pub const Iterator = struct {
     buffer: []u8,
     index: usize = 0,

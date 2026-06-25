@@ -151,7 +151,13 @@ pub const ParamContextValues = struct {
     }
 };
 
-pub fn connect(ctx: ParamContext, io: std.Io) !std.Io.net.Stream {
+pub const Connection = struct {
+    ip_addr_form: [128]u8 = undefined,
+    address: []const u8,
+    stream: std.Io.net.Stream,
+};
+
+pub fn connect(ctx: ParamContext, io: std.Io) !Connection {
     const server_addr = command_exec_root.getCliThenConfigValue(ctx.env, server_opt.server_opt_name, ctx.args, server_opt.option) orelse {
         log.err(server_opt.option.notSetErrorMsg("Server address"), .{});
         return error.ServerAddressNotSet;
@@ -170,20 +176,33 @@ pub fn connect(ctx: ParamContext, io: std.Io) !std.Io.net.Stream {
     const connect_options: std.Io.net.IpAddress.ConnectOptions = .{ .mode = .stream, .protocol = .tcp, .timeout = .none };
     const connect_err_msg = "Couldn't connect to host due to error: {t}.";
 
+    var connection: Connection = .{
+        .address = undefined,
+        .stream = undefined,
+    };
+
     const ip_addr = std.Io.net.IpAddress.parse(server_addr, port_num) catch {
+        connection.address = server_addr;
         const host_name = std.Io.net.HostName.init(server_addr) catch |err| {
             log.err("Host name could't be resolved: {t}.", .{err});
             return error.InvalidHostname;
         };
 
-        return host_name.connect(io, port_num, connect_options) catch |err| {
+        connection.stream = host_name.connect(io, port_num, connect_options) catch |err| {
             log.err(connect_err_msg, .{err});
             return error.UnableToConnect;
         };
+
+        return connection;
     };
 
-    return ip_addr.connect(io, connect_options) catch |err| {
+    var addr_writer = std.Io.Writer.fixed(&connection.ip_addr_form);
+    addr_writer.print("{f}", .{ip_addr}) catch unreachable;
+
+    connection.stream = ip_addr.connect(io, connect_options) catch |err| {
         log.err(connect_err_msg, .{err});
         return error.UnableToConnect;
     };
+
+    return connection;
 }

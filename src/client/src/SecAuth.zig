@@ -13,8 +13,13 @@ const log = std.log.scoped(.@"client/SecAuth");
 pub const VerifyError = error{ FirstTimeHost, OpenKnownHostsFailed } || crypt.SignAlgo.Signature.VerifyError;
 pub const GetSessionKeyError = error{ MissingKeyPair, IdentityElement };
 
-dh_key_pair: ?crypt.KeyxchAlgo.KeyPair = null,
-session_key: ?[crypt.AesAlgo.key_length]u8 = null,
+dh_key_pair: ?crypt.KeyxchAlgo.KeyPair,
+session_key: ?[crypt.AesAlgo.key_length]u8,
+
+pub const init: SecAuth = .{
+    .dh_key_pair = null,
+    .session_key = null,
+};
 
 pub fn verifyDHXchgPubKeyAuthenticity(
     conf: Conf,
