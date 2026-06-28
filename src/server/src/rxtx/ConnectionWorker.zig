@@ -32,7 +32,9 @@ pub fn init(stream: net.Stream, gpa: std.mem.Allocator, io: std.Io) std.mem.Allo
     };
 }
 
-pub fn deinit(self: ConnectionWorker, gpa: std.mem.Allocator) void {
+pub fn deinit(self: *ConnectionWorker, gpa: std.mem.Allocator, io: std.Io) void {
+    self.stop(io);
+
     gpa.free(self.write_buf);
     gpa.free(self.read_buf);
 }
@@ -43,6 +45,7 @@ pub fn start(self: *ConnectionWorker, io: std.Io) std.Io.ConcurrentError!void {
     self.read_task = try io.concurrent(readLoop, .{ self, io });
 }
 
+/// idempotent
 pub fn stop(self: *ConnectionWorker, io: std.Io) void {
     if (self.read_task) |*t| {
         t.cancel(io) catch {};
@@ -99,7 +102,7 @@ pub fn readLoop(self: *ConnectionWorker, io: std.Io) net.Stream.Reader.Error!voi
                 else => {},
             }
         } else {
-            log.warn("Failed to parse chunk: message is empty", .{});
+            log.warn("Failedto parse chunk: message is empty", .{});
             continue;
         }
     }

@@ -169,7 +169,7 @@ pub fn connect(ctx: ParamContext, io: std.Io) !Connection {
     };
 
     const port_num = std.fmt.parseInt(u16, server_port, 10) catch |err| {
-        log.err("Server port must be a 16-bit unsigned integer.", .{});
+        log.err("Couldn't parse port number: {t}. Server port must be a 16-bit unsigned integer.", .{err});
         return err;
     };
 

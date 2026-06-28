@@ -57,7 +57,7 @@ fn receiveLoop(self: *RequestReceiver, io: std.Io) std.Io.Cancelable!void {
             self.has_error = true;
             self.req_stor.broadcastSubsystemFail(io);
 
-            // wait until acknowledged by the main thread which determines the error recoverability
+            // wait until acknowledged by the parent thread which determines the error recoverability
             while (self.has_error == true)
                 try self.error_cond.wait(io, &self.error_lock);
 

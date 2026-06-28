@@ -11,7 +11,10 @@ const RawFileChunkBuffer = @import("RawFileChunkBuffer.zig");
 
 const RequestStorage = @This();
 
-pub const WaitForError = error{ SubsystemFail, QueueFull } || std.Io.Cancelable;
+const log = std.log.scoped(.@"client/rxtx/RequestStorage");
+
+pub const AddWaitQueryVecError = error{QueueFull};
+pub const WaitForError = error{SubsystemFail} || AddWaitQueryVecError || std.Io.Cancelable;
 
 pub const Query = union(RequestChunk.RequestType) {
     vol_add,
@@ -132,25 +135,67 @@ pub fn deinit(self: *RequestStorage, gpa: std.mem.Allocator) void {
     self.string_stor.deinitAll(gpa);
 }
 
-pub fn waitFor(self: *RequestStorage, wqv: *WaitQueryVec, io: std.Io, out_state_changes: *usize) WaitForError!void {
+pub fn addWaitQueryVec(self: *RequestStorage, wqv: *WaitQueryVec, io: std.Io) AddWaitQueryVecError!usize {
+    self.wait_q_lock.lockUncancelable(io);
+    defer self.wait_q_lock.unlock(io);
+
+    log.debug("wait locked", .{});
+
+    const idx: usize = for (&self.wait_q_vecs, 0..) |vec, i| {
+        if (vec == null)
+            break i;
+    } else return AddWaitQueryVecError.QueueFull;
+
+    self.wait_q_vecs[idx] = wqv;
+    return idx;
+}
+
+pub fn removeWaitQueryVec(self: *RequestStorage, wqv_idx: usize, io: std.Io) void {
+    self.wait_q_lock.lockUncancelable(io);
+    defer self.wait_q_lock.unlock(io);
+
+    self.wait_q_vecs[wqv_idx] = null;
+}
+
+pub fn consumeCompletedWQ(self: *RequestStorage, wqv: *WaitQueryVec, io: std.Io) ?WaitQuery {
+    self.wait_q_lock.lockUncancelable(io);
+    defer self.wait_q_lock.unlock(io);
+
+    const idx: usize = for (wqv.vec, 0..) |wq, i| {
+        if (wq.received)
+            break i;
+    } else return null;
+
+    const wq = wqv.vec[idx];
+    for (idx..wqv.vec.len - 1) |i| {
+        wqv.vec[i] = wqv.vec[i + 1];
+    }
+
+    wqv.vec = wqv.vec[0 .. wqv.vec.len - 1];
+
+    return wq;
+}
+
+pub fn waitForIdx(self: *RequestStorage, wqv_idx: usize, io: std.Io, out_state_changes: *usize) WaitForError!void {
     try self.wait_q_lock.lock(io);
     defer self.wait_q_lock.unlock(io);
 
-    const idx = for (&self.wait_q_vecs, 0..) |vec, i| {
-        if (vec == null)
-            break i;
-    } else return WaitForError.QueueFull;
+    const wqv = self.wait_q_vecs[wqv_idx];
 
-    self.wait_q_vecs[idx] = wqv;
-
-    while (!self.subsystem_fail and wqv.state_changes == 0)
+    while (!self.subsystem_fail and wqv.?.state_changes == 0)
         try self.wait_q_cond.wait(io, &self.wait_q_lock);
 
-    out_state_changes.* = wqv.state_changes;
-    self.wait_q_vecs[idx] = null;
+    out_state_changes.* = wqv.?.state_changes;
+    wqv.?.state_changes = 0;
 
     if (self.subsystem_fail)
         return WaitForError.SubsystemFail;
+}
+
+pub fn waitFor(self: *RequestStorage, wqv: *WaitQueryVec, io: std.Io, out_state_changes: *usize) WaitForError!void {
+    const idx = try self.addWaitQueryVec(wqv, io);
+    try self.waitForIdx(idx, io, out_state_changes);
+    self.removeWaitQueryVec(idx, io);
 }
 
 pub fn broadcastSubsystemFail(self: *RequestStorage, io: std.Io) void {
@@ -174,13 +219,17 @@ pub fn broadcastReceived(
 ) void {
     var broadcast: bool = false;
 
+    log.debug("broadcast received", .{});
+
     {
         self.wait_q_lock.lockUncancelable(io);
         defer self.wait_q_lock.unlock(io);
 
         for (self.wait_q_vecs) |vec| {
             if (vec) |v| {
+                log.debug("vec", .{});
                 for (v.vec) |*wq| {
+                    log.debug("active tags: {t}, {t}", .{ wq.result, identifier });
                     if (std.meta.activeTag(wq.result) == std.meta.activeTag(identifier)) {
                         if (switch (wq.result) {
                             .by_id => |id| id == identifier.by_id,
@@ -193,6 +242,7 @@ pub fn broadcastReceived(
                                 break :blk false;
                             },
                         }) {
+                            log.debug("broacast hit sweet spot", .{});
                             wq.received = true;
                             broadcast = true;
                             v.state_changes += 1;

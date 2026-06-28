@@ -8,4 +8,5 @@ pub const cli = struct {
 
 pub const rxtx = struct {
     pub const ConnectionWorker = @import("rxtx/ConnectionWorker.zig");
+    pub const NetAcceptor = @import("rxtx/NetAcceptor.zig");
 };
