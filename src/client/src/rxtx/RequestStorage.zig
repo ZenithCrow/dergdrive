@@ -139,8 +139,6 @@ pub fn addWaitQueryVec(self: *RequestStorage, wqv: *WaitQueryVec, io: std.Io) Ad
     self.wait_q_lock.lockUncancelable(io);
     defer self.wait_q_lock.unlock(io);
 
-    log.debug("wait locked", .{});
-
     const idx: usize = for (&self.wait_q_vecs, 0..) |vec, i| {
         if (vec == null)
             break i;
@@ -219,17 +217,13 @@ pub fn broadcastReceived(
 ) void {
     var broadcast: bool = false;
 
-    log.debug("broadcast received", .{});
-
     {
         self.wait_q_lock.lockUncancelable(io);
         defer self.wait_q_lock.unlock(io);
 
         for (self.wait_q_vecs) |vec| {
             if (vec) |v| {
-                log.debug("vec", .{});
                 for (v.vec) |*wq| {
-                    log.debug("active tags: {t}, {t}", .{ wq.result, identifier });
                     if (std.meta.activeTag(wq.result) == std.meta.activeTag(identifier)) {
                         if (switch (wq.result) {
                             .by_id => |id| id == identifier.by_id,
@@ -242,7 +236,6 @@ pub fn broadcastReceived(
                                 break :blk false;
                             },
                         }) {
-                            log.debug("broacast hit sweet spot", .{});
                             wq.received = true;
                             broadcast = true;
                             v.state_changes += 1;

@@ -35,9 +35,12 @@ pub fn verifyDHXchgPubKeyAuthenticity(
     try signature.verifyStrict(&dh_xchg_key, try .fromBytes(pub_key));
     out_verified.* = true;
 
-    const host = conf.root_conf.get(conf.known_hosts, address_name, allocator, io) catch |err| {
-        log.err("Failed to open known hosts file due to error: {t}.", .{err});
-        return VerifyError.OpenKnownHostsFailed;
+    const host = conf.root_conf.get(conf.known_hosts, address_name, allocator, io) catch |err| switch (err) {
+        RootConf.GetConfError.FileNotFound => null,
+        else => {
+            log.err("Failed to open known hosts file due to error: {t}.", .{err});
+            return VerifyError.OpenKnownHostsFailed;
+        },
     };
 
     if (host == null)

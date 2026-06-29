@@ -129,6 +129,10 @@ fn probeServer(args: []const []const u8, emap: *Environ.Map, gpa: std.mem.Alloca
                         try stdout_w.interface.flush();
                     }
 
+                    log.debug("kxchg_key: {b64}", .{k.pub_xchg_key});
+                    log.debug("sign_key: {b64}", .{k.pub_sign_key});
+                    log.debug("signature: {b64}", .{k.signature});
+
                     var verified: bool = undefined;
                     if (SecAuth.verifyDHXchgPubKeyAuthenticity(
                         ctx.conf.*,

@@ -48,7 +48,9 @@ pub fn start(self: *ConnectionWorker, io: std.Io) std.Io.ConcurrentError!void {
 /// idempotent
 pub fn stop(self: *ConnectionWorker, io: std.Io) void {
     if (self.read_task) |*t| {
-        t.cancel(io) catch {};
+        t.cancel(io) catch |err| {
+            log.warn("Collecting net read task with error: {t}.", .{err});
+        };
         self.read_task = null;
     }
 }
@@ -59,11 +61,17 @@ pub fn readLoop(self: *ConnectionWorker, io: std.Io) net.Stream.Reader.Error!voi
 
     while (true) {
         const msg = msg_iter.nextMsg(&reader.interface) catch |err| switch (err) {
-            std.Io.Reader.Error.ReadFailed => {
-                log.err("Couldn't read from reader due to error: {t}.", .{reader.err.?});
-                return reader.err.?;
+            std.Io.Reader.Error.ReadFailed => switch (reader.err.?) {
+                net.Stream.Reader.Error.Canceled => |e| return e,
+                else => |e| {
+                    log.err("Couldn't read from net reader due to error: {t}.", .{reader.err.?});
+                    return e;
+                },
             },
-            std.Io.Reader.Error.EndOfStream => return,
+            std.Io.Reader.Error.EndOfStream => {
+                log.info("Client {f} disconnected.", .{self.stream.socket.address});
+                return;
+            },
         };
         var chunk_iter = msg.iter();
 
@@ -86,7 +94,12 @@ pub fn readLoop(self: *ConnectionWorker, io: std.Io) net.Stream.Reader.Error!voi
                 .key_xchg => {
                     const kxchg_keypair: dergdrive.crypt.KeyxchAlgo.KeyPair = .generate(io);
                     const sign_keypair: dergdrive.crypt.SignAlgo.KeyPair = .generate(io);
-                    const signature = sign_keypair.sign(&sign_keypair.public_key.toBytes(), null) catch unreachable;
+                    var noise: [dergdrive.crypt.SignAlgo.noise_length]u8 = undefined;
+                    std.Io.random(io, &noise);
+                    const signature = sign_keypair.sign(&kxchg_keypair.public_key, noise) catch unreachable;
+                    log.debug("kxchg_key: {b64}", .{kxchg_keypair.public_key});
+                    log.debug("sign_key: {b64}", .{sign_keypair.public_key.toBytes()});
+                    log.debug("signature: {b64}", .{signature.toBytes()});
 
                     var kxchg_snake: sync.MsgChunkSnake = .fromBuf(self.write_buf);
                     const kxchg_msg = kxchg_snake.keyxchg(
@@ -102,7 +115,7 @@ pub fn readLoop(self: *ConnectionWorker, io: std.Io) net.Stream.Reader.Error!voi
                 else => {},
             }
         } else {
-            log.warn("Failedto parse chunk: message is empty", .{});
+            log.warn("Failed to parse chunk: message is empty", .{});
             continue;
         }
     }

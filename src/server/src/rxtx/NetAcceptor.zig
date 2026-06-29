@@ -36,11 +36,30 @@ pub fn deinit(self: *NetAcceptor, gpa: std.mem.Allocator, io: std.Io) void {
         const node = self.connections.pop() orelse unreachable;
         const task: *ConnectionTask = @fieldParentPtr("node", node);
 
-        task.conn_worker.stream.close(io);
-        task.conn_worker.deinit(gpa, io);
+        {
+            self.conn_lock.unlock(io);
+            defer self.conn_lock.lockUncancelable(io);
 
-        gpa.destroy(task);
+            self.deinitTask(task, gpa, io);
+        }
     }
+}
+
+pub fn deinitTask(self: *NetAcceptor, task: *ConnectionTask, gpa: std.mem.Allocator, io: std.Io) void {
+    {
+        self.conn_lock.lockUncancelable(io);
+        defer self.conn_lock.unlock(io);
+
+        self.connections.remove(&task.node);
+    }
+
+    log.debug("Cleaned up connection from {f}.", .{task.conn_worker.stream.socket.address});
+
+    task.conn_worker.stop(io);
+    task.conn_worker.stream.close(io);
+    task.conn_worker.deinit(gpa, io);
+
+    gpa.destroy(task);
 }
 
 pub fn start(self: *NetAcceptor, gpa: std.mem.Allocator, io: std.Io) std.Io.ConcurrentError!void {
@@ -52,8 +71,9 @@ pub fn start(self: *NetAcceptor, gpa: std.mem.Allocator, io: std.Io) std.Io.Conc
 /// idempotent
 pub fn stop(self: *NetAcceptor, io: std.Io) void {
     if (self.accept_task) |*t| {
-        t.cancel(io) catch |err| {
-            log.warn("Collecting accept task with error: {t}.", .{err});
+        t.cancel(io) catch |err| switch (err) {
+            AcceptLoopError.Canceled => {},
+            else => log.warn("Collecting net accept task with error: {t}.", .{err}),
         };
         self.accept_task = null;
     }

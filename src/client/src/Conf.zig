@@ -15,8 +15,8 @@ const g_conf_file_hierarchy_client: []const RootConf.ConfFile = RootConf.g_conf_
 
 const g_mfest_cache: RootConf.ConfFile = .{ .nspace = .from(.{ .cache = .vol }), .sub_path = "manifest" };
 const g_oride_prefixes: RootConf.ConfFile = .{ .nspace = .from(.{ .config = .vol }), .sub_path = "prefix_overrides.cfg" };
-const g_known_hosts: RootConf.ConfFile = .{ .nspace = .{ .nspace = .{ .config = .user } }, .sub_path = "known_hosts.cfg" };
-const g_access_tokens: RootConf.ConfFile = .{ .nspace = .{ .nspace = .{ .pers = .secret } }, .sub_path = "access_tokens" };
+const g_known_hosts: RootConf.ConfFile = .{ .nspace = .from(.{ .config = .user }), .sub_path = "known_hosts.cfg" };
+const g_access_tokens: RootConf.ConfFile = .{ .nspace = .from(.{ .pers = .secret }), .sub_path = "access_tokens" };
 
 root_conf: RootConf,
 mfest_cache: RootConf.ConfFile = g_mfest_cache,

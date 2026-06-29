@@ -29,4 +29,4 @@ pub const command_list: []const Command = &(.{
 } ++ if (builtin.mode == .Debug) .{
     @"test-sync_cmd".command,
     @"test-pipe_cmd".command,
-});
+} else .{});

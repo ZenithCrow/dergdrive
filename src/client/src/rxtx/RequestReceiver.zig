@@ -11,11 +11,13 @@ const RequestReceiver = @This();
 
 const log = std.log.scoped(.@"client/rxtx/RequestReceiver");
 
+pub const SubsysError = std.Io.Reader.Error || std.Io.Cancelable;
+
 reader: *std.Io.Reader,
 read_buf: []u8,
 req_stor: *RequestStorage,
 receive_task: ?std.Io.Future(std.Io.Cancelable!void) = null,
-has_error: bool = false,
+err: ?SubsysError = null,
 error_lock: std.Io.Mutex = .init,
 error_cond: std.Io.Condition = .init,
 
@@ -39,6 +41,13 @@ pub fn start(self: *RequestReceiver, io: std.Io) std.Io.ConcurrentError!void {
 
 pub fn stop(self: *RequestReceiver, io: std.Io) void {
     if (self.receive_task) |*t| {
+        {
+            self.error_lock.lockUncancelable(io);
+            defer self.error_lock.unlock(io);
+
+            self.err = SubsysError.Canceled;
+        }
+
         t.cancel(io) catch {};
         self.receive_task = null;
     }
@@ -49,16 +58,21 @@ fn receiveLoop(self: *RequestReceiver, io: std.Io) std.Io.Cancelable!void {
 
     while (true) {
         const msg = msg_iter.nextMsg(self.reader) catch |err| {
-            log.warn("Couldn't read from reader due to error: {t}.", .{err});
+            log.debug("Couldn't read from reader due to error: {t}.", .{err});
 
             try self.error_lock.lock(io);
             defer self.error_lock.unlock(io);
 
-            self.has_error = true;
+            if (self.err) |ce| {
+                if (ce == SubsysError.Canceled)
+                    return @errorCast(ce);
+            }
+
+            self.err = err;
             self.req_stor.broadcastSubsystemFail(io);
 
             // wait until acknowledged by the parent thread which determines the error recoverability
-            while (self.has_error == true)
+            while (self.err != null)
                 try self.error_cond.wait(io, &self.error_lock);
 
             continue;
