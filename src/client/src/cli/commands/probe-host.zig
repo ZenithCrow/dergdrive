@@ -9,17 +9,17 @@ const command_exec = client_cli.command_exec;
 const server_opt = options.server;
 const service = client_cli.service;
 const rxtx = client.rxtx;
-const SecAuth = client.SecAuth;
 const dergdrive = @import("dergdrive");
 const cli = dergdrive.cli;
 const root_cmd_exec = cli.command_exec;
 const port_opt = cli.options.port;
+const SecAuth = dergdrive.SecAuth;
 
 const log = std.log.scoped(.@"client/cli/commands/probe-server");
 
 pub const command: cli.Command = .{
-    .name = "probe-server",
-    .usage = "probe-server",
+    .name = "probe-host",
+    .usage = "probe-host",
     .desc = "Connect to a given server, try to establish a secure channel and print the results",
     .exec_fn = struct {
         pub fn execFn(args: []const []const u8, emap: *Environ.Map, gpa: std.mem.Allocator, io: std.Io) cli.Command.ExecError!void {
@@ -99,7 +99,7 @@ fn probeServer(args: []const []const u8, emap: *Environ.Map, gpa: std.mem.Alloca
 
     try request_sender.prio_request.sendVersion(null, io);
 
-    var sec_auth: SecAuth = .init;
+    var sec_auth: SecAuth = .init(null, io);
     const pub_key = sec_auth.getDHXchgPubKey(io);
     try request_sender.prio_request.sendKeyXchg(pub_key, io);
 
@@ -146,7 +146,8 @@ fn probeServer(args: []const []const u8, emap: *Environ.Map, gpa: std.mem.Alloca
                     )) |_| {
                         log.info("Server relation is healthy.", .{});
                     } else |err| switch (err) {
-                        SecAuth.VerifyError.FirstTimeHost => log.warn("Authenticity of this host can't be verified, since it is not included in known hosts. Tread carefully.", .{}),
+                        SecAuth.VerifyError.FirstTimeHost => log.warn("Authenticity of this host can't be verified, since it is not included in known hosts. Tread carefully. To add this host, use the 'add-host' command or edit the known hosts file.", .{}),
+                        SecAuth.VerifyError.HostImpersonation => log.err("The public key of this known host is different from the one it currently presents itself with. Tread extra carefully, someone might be trying to impersonate this host. If you are 100% sure the public key has changed, use the 'update-host' command or edit the known hosts file.", .{}),
                         SecAuth.VerifyError.OpenKnownHostsFailed => log.err("Couldn't open known hosts file. The signature was successfully verified. Tread carefully.", .{}),
                         SecAuth.VerifyError.SignatureVerificationFailed => log.err("Failed to verify host signature. This is a huge security risk. Tread extra carefully.", .{}),
                         else => log.err("Couldn't verify host signature due to error: {t}. Tread extra carefully.", .{err}),

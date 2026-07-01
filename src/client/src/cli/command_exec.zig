@@ -6,7 +6,7 @@ const commands = client.cli.commands;
 const @"ls-include_cmd" = commands.@"ls-include";
 const @"test-pipe_cmd" = commands.@"test-pipe";
 const @"test-sync_cmd" = commands.@"test-sync";
-const @"probe-server_cmd" = commands.@"probe-server";
+const @"probe-host_cmd" = commands.@"probe-host";
 const client_cli = client.cli;
 const options = client_cli.options;
 const vol_opt = options.vol;
@@ -25,7 +25,7 @@ const port_opt = options_root.port;
 
 pub const command_list: []const Command = &(.{
     @"ls-include_cmd".command,
-    @"probe-server_cmd".command,
+    @"probe-host_cmd".command,
 } ++ if (builtin.mode == .Debug) .{
     @"test-sync_cmd".command,
     @"test-pipe_cmd".command,

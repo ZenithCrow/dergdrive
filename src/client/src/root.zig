@@ -1,7 +1,6 @@
 const dergdrive = @import("dergdrive");
 
 pub const Conf = @import("Conf.zig");
-pub const SecAuth = @import("SecAuth.zig");
 
 pub const cli = struct {
     pub const command_exec = @import("cli/command_exec.zig");
@@ -11,7 +10,7 @@ pub const cli = struct {
         pub const @"ls-include" = @import("cli/commands/ls-include.zig");
         pub const @"test-pipe" = @import("cli/commands/test-pipe.zig");
         pub const @"test-sync" = @import("cli/commands/test-sync.zig");
-        pub const @"probe-server" = @import("cli/commands/probe-server.zig");
+        pub const @"probe-host" = @import("cli/commands/probe-host.zig");
     };
 
     pub const options = struct {

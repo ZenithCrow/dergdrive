@@ -1,3 +1,5 @@
+pub const Conf = @import("Conf.zig");
+
 pub const cli = struct {
     pub const commands = struct {
         pub const server = @import("cli/commands/server.zig");
@@ -9,4 +11,5 @@ pub const cli = struct {
 pub const rxtx = struct {
     pub const ConnectionWorker = @import("rxtx/ConnectionWorker.zig");
     pub const NetAcceptor = @import("rxtx/NetAcceptor.zig");
+    pub const QuickRespService = @import("rxtx/QuickRespService.zig");
 };

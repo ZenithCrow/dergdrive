@@ -9,6 +9,7 @@ pub const server = @import("dergdrive-server");
 pub const version = @import("version").v;
 
 pub const crypt = @import("crypt/crypt.zig");
+pub const SecAuth = @import("crypt/SecAuth.zig");
 
 pub const cli = struct {
     pub const commands = struct {

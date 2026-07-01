@@ -12,12 +12,14 @@ const log = std.log.scoped(.@"server/rxtx/ConnectionWorker");
 
 stream: net.Stream,
 write_buf: []u8,
+data_len: usize = 0,
 read_buf: []u8,
-writer: net.Stream.Writer,
-write_lock: std.Io.Mutex,
+write_lock: std.Io.Mutex = .init,
+write_cond: std.Io.Condition = .init,
 read_task: ?std.Io.Future(net.Stream.Reader.Error!void) = null,
+write_task: ?std.Io.Future(net.Stream.Writer.Error!void) = null,
 
-pub fn init(stream: net.Stream, gpa: std.mem.Allocator, io: std.Io) std.mem.Allocator.Error!ConnectionWorker {
+pub fn init(stream: net.Stream, gpa: std.mem.Allocator) std.mem.Allocator.Error!ConnectionWorker {
     const write_buf = try gpa.alloc(u8, common.op_buf_size);
     errdefer gpa.free(write_buf);
     const read_buf = try gpa.alloc(u8, common.op_buf_size);
@@ -27,8 +29,6 @@ pub fn init(stream: net.Stream, gpa: std.mem.Allocator, io: std.Io) std.mem.Allo
         .stream = stream,
         .write_buf = write_buf,
         .read_buf = read_buf,
-        .writer = stream.writer(io, &.{}),
-        .write_lock = .init,
     };
 }
 
@@ -43,6 +43,7 @@ pub fn start(self: *ConnectionWorker, io: std.Io) std.Io.ConcurrentError!void {
     std.debug.assert(self.read_task == null);
 
     self.read_task = try io.concurrent(readLoop, .{ self, io });
+    self.write_task = try io.concurrent(writeLoop, .{ self, io });
 }
 
 /// idempotent
@@ -53,9 +54,16 @@ pub fn stop(self: *ConnectionWorker, io: std.Io) void {
         };
         self.read_task = null;
     }
+
+    if (self.write_task) |*t| {
+        t.cancel(io) catch |err| {
+            log.warn("Collecting net write task with error: {t}.", .{err});
+        };
+        self.write_task = null;
+    }
 }
 
-pub fn readLoop(self: *ConnectionWorker, io: std.Io) net.Stream.Reader.Error!void {
+fn readLoop(self: *ConnectionWorker, io: std.Io) net.Stream.Reader.Error!void {
     var reader = self.stream.reader(io, &.{});
     var msg_iter: ZeroTrustMsgIterator = .{ .buf = self.read_buf };
 
@@ -64,7 +72,7 @@ pub fn readLoop(self: *ConnectionWorker, io: std.Io) net.Stream.Reader.Error!voi
             std.Io.Reader.Error.ReadFailed => switch (reader.err.?) {
                 net.Stream.Reader.Error.Canceled => |e| return e,
                 else => |e| {
-                    log.err("Couldn't read from net reader due to error: {t}.", .{reader.err.?});
+                    log.err("Couldn't read from net reader due to error: {t}.", .{e});
                     return e;
                 },
             },
@@ -118,5 +126,25 @@ pub fn readLoop(self: *ConnectionWorker, io: std.Io) net.Stream.Reader.Error!voi
             log.warn("Failed to parse chunk: message is empty", .{});
             continue;
         }
+    }
+}
+
+fn writeLoop(self: *ConnectionWorker, io: std.Io) net.Stream.Writer.Error!void {
+    var writer = self.stream.writer(io, &.{});
+
+    while (true) {
+        try self.write_lock.lock(io);
+        defer self.write_lock.unlock(io);
+
+        while (self.data_len == 0)
+            try self.write_cond.wait(io, &self.write_lock);
+
+        writer.interface.writeAll(self.write_buf[0..self.data_len]) catch switch (writer.err.?) {
+            net.Stream.Writer.Error.Canceled => |e| return e,
+            else => |e| {
+                log.err("Couldn't write to net reader due to error: {t}.", .{e});
+                return e;
+            },
+        };
     }
 }

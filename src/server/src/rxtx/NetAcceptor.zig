@@ -90,7 +90,7 @@ fn acceptLoop(self: *NetAcceptor, gpa: std.mem.Allocator, io: std.Io) AcceptLoop
         errdefer stream.close(io);
         log.debug("Accepted connection from {f}.", .{stream.socket.address});
 
-        var cw: ConnectionWorker = try .init(stream, gpa, io);
+        var cw: ConnectionWorker = try .init(stream, gpa);
         errdefer cw.deinit(gpa, io);
 
         const conn_task = try gpa.create(ConnectionTask);
