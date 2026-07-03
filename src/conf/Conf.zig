@@ -55,6 +55,17 @@ pub const ConfPrefix = struct {
     pers_vol_local_linux: []const u8 = pers_vol_linux,
     pers_vol_secret_linux: []const u8 = pers_vol_secret_linux,
     pers_internal: []const u8 = pers_internal,
+
+    config_global_windows: []const u8 = config_global_windows,
+    config_user_windows: []const u8 = config_user_windows,
+    config_vol_windows: []const u8 = config_vol_windows,
+    cache_user_windows: []const u8 = cache_user_windows,
+    cache_vol_windows: []const u8 = cache_vol_windows,
+    pers_global_windows: []const u8 = pers_global_windows,
+    pers_user_windows: []const u8 = pers_user_windows,
+    pers_user_secret_windows: []const u8 = pers_user_secret_windows,
+    pers_vol_windows: []const u8 = pers_vol_windows,
+    pers_vol_secret_windows: []const u8 = pers_vol_secret_windows,
 };
 
 pub const Nspace = enum {
@@ -103,6 +114,29 @@ pub const PfixNspace = struct {
                     .internal => self.pfix.pers_internal,
                     .secret => self.pfix.pers_user_secret_linux,
                     .vol_secret => self.pfix.pers_vol_secret_linux,
+                },
+            },
+            .windows => switch (self.nspace) {
+                .config => |nspace| switch (nspace) {
+                    .global => self.pfix.config_global_windows,
+                    .user => self.pfix.config_user_windows,
+                    .vol => self.pfix.config_vol_windows,
+                    .internal => self.pfix.config_internal,
+                    else => @panic("namespace not supported for config"),
+                },
+                .cache => |nspace| switch (nspace) {
+                    .user => self.pfix.cache_user_windows,
+                    .vol => self.pfix.cache_vol_windows,
+                    .internal => self.pfix.cache_internal,
+                    else => @panic("namespace not supported for cache"),
+                },
+                .pers => |nspace| switch (nspace) {
+                    .global => self.pfix.pers_global_windows,
+                    .user => self.pfix.pers_user_windows,
+                    .vol => self.pfix.pers_vol_windows,
+                    .internal => self.pfix.pers_internal,
+                    .secret => self.pfix.pers_user_secret_windows,
+                    .vol_secret => self.pfix.pers_vol_secret_windows,
                 },
             },
             else => @compileError("implement this for your os if you want it so bad"),
@@ -162,7 +196,7 @@ pub const KeyValueIterator = struct {
 pub const config_filename = "config";
 pub const g_conf_file_default: ConfFile = .{ .nspace = .from(.{ .config = .user }), .sub_path = config_filename, .always_create = true };
 pub const g_conf_file_hierarchy: []const ConfFile = switch (builtin.os.tag) {
-    .linux => &.{
+    .linux, .windows => &.{
         .{ .nspace = .from(.{ .config = .internal }), .sub_path = config_filename, .always_create = false },
         .{ .nspace = .from(.{ .config = .global }), .sub_path = config_filename, .always_create = false },
         g_conf_file_default,
@@ -272,8 +306,10 @@ pub fn openOrCreateConfFile(self: Conf, conf_file: ConfFile, truncate: bool, all
     const file = try dir.createFile(io, file_path, .{ .read = true, .truncate = truncate });
     errdefer file.close(io);
 
-    switch (conf_file.nspace.nspace) {
-        .cache, .config, .pers => |nspace| if (nspace == .secret) try file.setPermissions(io, .fromMode(0o600)),
+    if (builtin.os.tag != .windows) {
+        switch (conf_file.nspace.nspace) {
+            .cache, .config, .pers => |nspace| if (nspace == .secret) try file.setPermissions(io, .fromMode(0o600)),
+        }
     }
 
     return file;
