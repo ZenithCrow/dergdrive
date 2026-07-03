@@ -7,7 +7,7 @@ const RootConf = dergdrive.conf.Conf;
 const Conf = @This();
 
 const g_conf_file_hierarchy_client: []const RootConf.ConfFile = RootConf.g_conf_file_hierarchy ++ switch (builtin.os.tag) {
-    .linux => &[_]RootConf.ConfFile{
+    .linux, .windows => &[_]RootConf.ConfFile{
         .{ .nspace = .from(.{ .config = .vol }), .sub_path = RootConf.config_filename, .always_create = false },
     },
     else => @compileError("implement mee >w< uhgmmm.."),
