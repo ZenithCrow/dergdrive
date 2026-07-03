@@ -91,34 +91,10 @@ fn readLoop(self: *ConnectionWorker, io: std.Io) net.Stream.Reader.Error!void {
         if (chunk) |c| {
             log.debug("parsing chunk: {t}", .{c.chunk_type});
             switch (c.chunk_type) {
-                .version => {
-                    var ver_snake: sync.MsgChunkSnake = .fromBuf(self.write_buf);
-                    const ver_msg = ver_snake.version(null).finalize() catch unreachable;
-                    const ver_msg_size = ver_msg.getMsgSize() catch unreachable;
-                    self.writer.interface.writeAll(ver_msg.msg_buf[0..ver_msg_size]) catch {
-                        log.err("write failed", .{});
-                    };
-                },
+                //  TODO: check version compatibility
+                .version => {},
                 .key_xchg => {
-                    const kxchg_keypair: dergdrive.crypt.KeyxchAlgo.KeyPair = .generate(io);
-                    const sign_keypair: dergdrive.crypt.SignAlgo.KeyPair = .generate(io);
-                    var noise: [dergdrive.crypt.SignAlgo.noise_length]u8 = undefined;
-                    std.Io.random(io, &noise);
-                    const signature = sign_keypair.sign(&kxchg_keypair.public_key, noise) catch unreachable;
-                    log.debug("kxchg_key: {b64}", .{kxchg_keypair.public_key});
-                    log.debug("sign_key: {b64}", .{sign_keypair.public_key.toBytes()});
-                    log.debug("signature: {b64}", .{signature.toBytes()});
-
-                    var kxchg_snake: sync.MsgChunkSnake = .fromBuf(self.write_buf);
-                    const kxchg_msg = kxchg_snake.keyxchg(
-                        kxchg_keypair.public_key,
-                        sign_keypair.public_key.toBytes(),
-                        signature.toBytes(),
-                    ).finalize() catch unreachable;
-                    const kxchg_msg_len = kxchg_msg.getMsgSize() catch unreachable;
-                    self.writer.interface.writeAll(kxchg_msg.msg_buf[0..kxchg_msg_len]) catch {
-                        log.err("write failed", .{});
-                    };
+                    //  TODO: compute session key
                 },
                 else => {},
             }
@@ -142,7 +118,7 @@ fn writeLoop(self: *ConnectionWorker, io: std.Io) net.Stream.Writer.Error!void {
         writer.interface.writeAll(self.write_buf[0..self.data_len]) catch switch (writer.err.?) {
             net.Stream.Writer.Error.Canceled => |e| return e,
             else => |e| {
-                log.err("Couldn't write to net reader due to error: {t}.", .{e});
+                log.err("Couldn't write to net writer due to error: {t}.", .{e});
                 return e;
             },
         };

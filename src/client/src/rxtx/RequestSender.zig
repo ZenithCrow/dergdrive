@@ -5,7 +5,6 @@ const sync = @import("dergdrive").proto.sync;
 
 const Cryptor = @import("Cryptor.zig");
 const pipe_adapter = @import("pipe_adapter.zig");
-const PrioRequest = @import("PrioRequest.zig");
 const RequestChunkBuffer = @import("RequestChunkBuffer.zig");
 const RequestStorage = @import("RequestStorage.zig");
 
@@ -14,6 +13,36 @@ const log = std.log.scoped(.@"client/rxtx/RequestSender");
 const RequestSender = @This();
 
 pub const SubsysError = std.Io.Writer.Error || std.Io.Cancelable;
+
+pub const PrioRequest = struct {
+    pub const SendError = sync.Chunk.ReadError || std.Io.Cancelable;
+
+    request_buf: RequestChunkBuffer,
+
+    pub fn waitForEmptyBuf(self: *PrioRequest, io: std.Io) std.Io.Cancelable![]u8 {
+        try self.request_buf.chunk_buf.waitUntilState(.empty, io);
+        return self.request_buf.chunk_buf.buf;
+    }
+
+    fn signal(self: *PrioRequest, io: std.Io) void {
+        const req_sender: *RequestSender = @fieldParentPtr("prio_request", self);
+        req_sender.signalPriorityRequest(io);
+    }
+
+    pub fn sendMsg(self: *PrioRequest, msg: sync.SyncMessage, io: std.Io) SendError!void {
+        {
+            self.request_buf.chunk_buf.w_lock.lockUncancelable(io);
+            defer self.request_buf.chunk_buf.w_lock.unlock(io);
+
+            self.request_buf.chunk_buf.data_len = try msg.getMsgSize();
+            log.debug("msg size: {d}", .{self.request_buf.chunk_buf.data_len});
+        }
+
+        self.request_buf.sync_msg = msg;
+        try self.request_buf.chunk_buf.setStateAndSignal(.full, io);
+        self.signal(io);
+    }
+};
 
 enc_file_reqs: *pipe_adapter.RequestPipeAdapter,
 prio_request: PrioRequest,

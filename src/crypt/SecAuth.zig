@@ -15,7 +15,7 @@ pub const VerifyError = error{
     OpenKnownHostsFailed,
     HostImpersonation,
 } || crypt.SignAlgo.Signature.VerifyError;
-pub const GetPubXchgKeySig = error{ MissingKeyPair, IdentityElementError, NonCanonicalError, KeyMismatchError, WeakPublicKeyError };
+pub const GetPubXchgKeySig = error{ MissingKeyPair, IdentityElement, NonCanonical, KeyMismatch, WeakPublicKey };
 pub const GetSessionKeyError = error{IdentityElement};
 
 dh_key_pair: crypt.KeyxchAlgo.KeyPair,
@@ -55,13 +55,8 @@ pub fn verifyDHXchgPubKeyAuthenticity(
     } else return VerifyError.FirstTimeHost;
 }
 
-pub fn getDHXchgPubKey(self: *SecAuth, io: std.Io) [crypt.KeyxchAlgo.public_length]u8 {
-    if (self.dh_key_pair) |pair| {
-        return pair.public_key;
-    }
-
-    self.dh_key_pair = .generate(io);
-    return self.dh_key_pair.?.public_key;
+pub fn getDHXchgPubKey(self: *SecAuth) [crypt.KeyxchAlgo.public_length]u8 {
+    return self.dh_key_pair.public_key;
 }
 
 pub fn getPubXchgKeySig(self: SecAuth, io: std.Io) GetPubXchgKeySig!crypt.SignAlgo.Signature {
@@ -74,7 +69,7 @@ pub fn getPubXchgKeySig(self: SecAuth, io: std.Io) GetPubXchgKeySig!crypt.SignAl
 }
 
 pub fn getSessionKey(self: *SecAuth, dh_xchg_key: [crypt.KeyxchAlgo.public_length]u8) GetSessionKeyError![crypt.AesAlgo.key_length]u8 {
-    const shared_scrt = try crypt.KeyxchAlgo.scalarmult(self.dh_key_pair.?.secret_key, dh_xchg_key);
+    const shared_scrt = try crypt.KeyxchAlgo.scalarmult(self.dh_key_pair.secret_key, dh_xchg_key);
     self.session_key = std.crypto.kdf.hkdf.HkdfSha256.extract("", &shared_scrt);
     return self.session_key.?;
 }

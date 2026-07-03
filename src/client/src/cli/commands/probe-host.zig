@@ -9,6 +9,7 @@ const command_exec = client_cli.command_exec;
 const server_opt = options.server;
 const service = client_cli.service;
 const rxtx = client.rxtx;
+const PrioReqService = rxtx.PrioReqService;
 const dergdrive = @import("dergdrive");
 const cli = dergdrive.cli;
 const root_cmd_exec = cli.command_exec;
@@ -68,6 +69,8 @@ fn probeServer(args: []const []const u8, emap: *Environ.Map, gpa: std.mem.Alloca
     var request_sender: rxtx.RequestSender = try .init(&tailpiece_request_pa, &writer.interface, &req_stor, gpa);
     defer request_sender.deinit(gpa);
 
+    const prio_req_service: PrioReqService = .{ .req_sender = &request_sender };
+
     var reqest_receiver: rxtx.RequestReceiver = try .init(&reader.interface, &req_stor, gpa);
     defer reqest_receiver.deinit(gpa);
 
@@ -97,11 +100,11 @@ fn probeServer(args: []const []const u8, emap: *Environ.Map, gpa: std.mem.Alloca
     const wqv_idx = try req_stor.addWaitQueryVec(&wqv, io);
     defer req_stor.removeWaitQueryVec(wqv_idx, io);
 
-    try request_sender.prio_request.sendVersion(null, io);
+    try prio_req_service.sendVersion(null, io);
 
     var sec_auth: SecAuth = .init(null, io);
-    const pub_key = sec_auth.getDHXchgPubKey(io);
-    try request_sender.prio_request.sendKeyXchg(pub_key, io);
+    const pub_key = sec_auth.getDHXchgPubKey();
+    try prio_req_service.sendKeyXchg(pub_key, io);
 
     var w_buf: [128]u8 = undefined;
     var stdout_w = std.Io.File.stdout().writerStreaming(io, &w_buf);

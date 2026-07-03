@@ -1,4 +1,5 @@
 pub const Conf = @import("Conf.zig");
+pub const GlobCtx = @import("GlobCtx.zig");
 
 pub const cli = struct {
     pub const commands = struct {
@@ -9,6 +10,7 @@ pub const cli = struct {
 };
 
 pub const rxtx = struct {
+    pub const Connection = @import("rxtx/Connection.zig");
     pub const ConnectionWorker = @import("rxtx/ConnectionWorker.zig");
     pub const NetAcceptor = @import("rxtx/NetAcceptor.zig");
     pub const QuickRespService = @import("rxtx/QuickRespService.zig");

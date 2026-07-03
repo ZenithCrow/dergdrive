@@ -38,7 +38,7 @@ pub const rxtx = struct {
     pub const RequestSender = @import("rxtx/RequestSender.zig");
     pub const RequestStorage = @import("rxtx/RequestStorage.zig");
     pub const pipe_adapter = @import("rxtx/pipe_adapter.zig");
-    pub const PrioRequest = @import("rxtx/PrioRequest.zig");
+    pub const PrioReqService = @import("rxtx/PrioReqService.zig");
 };
 
 test {

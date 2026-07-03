@@ -1,6 +1,7 @@
 const std = @import("std");
 const net = std.Io.net;
 
+const Connection = @import("Connection.zig");
 const ConnectionWorker = @import("ConnectionWorker.zig");
 
 const NetAcceptor = @This();
@@ -11,7 +12,7 @@ const log = std.log.scoped(.@"server/rxtx/NetAcceptor");
 
 pub const ConnectionTask = struct {
     node: std.DoublyLinkedList.Node,
-    conn_worker: ConnectionWorker,
+    conn: Connection,
 };
 
 port: u16,
@@ -53,11 +54,11 @@ pub fn deinitTask(self: *NetAcceptor, task: *ConnectionTask, gpa: std.mem.Alloca
         self.connections.remove(&task.node);
     }
 
-    log.debug("Cleaned up connection from {f}.", .{task.conn_worker.stream.socket.address});
+    log.debug("Cleaned up connection from {f}.", .{task.conn.worker.stream.socket.address});
 
-    task.conn_worker.stop(io);
-    task.conn_worker.stream.close(io);
-    task.conn_worker.deinit(gpa, io);
+    task.conn.worker.stop(io);
+    task.conn.worker.stream.close(io);
+    task.conn.worker.deinit(gpa, io);
 
     gpa.destroy(task);
 }
@@ -98,11 +99,14 @@ fn acceptLoop(self: *NetAcceptor, gpa: std.mem.Allocator, io: std.Io) AcceptLoop
 
         conn_task.* = .{
             .node = .{},
-            .conn_worker = cw,
+            .conn = .{
+                .worker = cw,
+                .sec_auth = .init(null, io),
+            },
         };
 
-        try conn_task.conn_worker.start(io);
-        errdefer conn_task.conn_worker.stop(io);
+        try conn_task.conn.worker.start(io);
+        errdefer conn_task.conn.worker.stop(io);
 
         {
             try self.conn_lock.lock(io);

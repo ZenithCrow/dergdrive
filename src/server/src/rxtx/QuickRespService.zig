@@ -25,5 +25,5 @@ pub fn getHandshake(sec_auth: SecAuth, buf: *[handshake_len]u8, io: std.Io) SecA
 
     const sig = try sec_auth.getPubXchgKeySig(io);
     var kxhg_snake: sync.MsgChunkSnake = .fromBuf(buf[ver_msg_len..]);
-    _ = kxhg_snake.keyxchg(sec_auth.dh_key_pair.public_key, sec_auth.sign_key_pair.?.public_key.toBytes(), sig).finalize() catch unreachable;
+    _ = kxhg_snake.keyxchg(sec_auth.dh_key_pair.public_key, sec_auth.sign_key_pair.?.public_key.toBytes(), sig.toBytes()).finalize() catch unreachable;
 }

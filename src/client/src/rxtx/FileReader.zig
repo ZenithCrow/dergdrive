@@ -7,7 +7,7 @@ const sync = dergdrive.proto.sync;
 const FileRecordMap = dergdrive.client.track.FileRecordMap;
 
 const pipe_adapter = @import("pipe_adapter.zig");
-const PrioRequest = @import("PrioRequest.zig");
+const PrioRequest = @import("PrioReqService.zig");
 const RawFileChunkBuffer = @import("RawFileChunkBuffer.zig");
 const RequestStorage = @import("RequestStorage.zig");
 
