@@ -6,6 +6,8 @@ pub const proj_name: []const u8 = dergdrive.cli.command_exec.prog_name;
 
 const Conf = @This();
 
+const log = std.log.scoped(.@"conf/Conf");
+
 pub const GetFileContentError = std.Io.File.StatError || std.mem.Allocator.Error || std.Io.File.Reader.Error;
 pub const GetFileContentFromPathError = GetFileContentError || std.Io.File.OpenError;
 pub const OpenOrCreateConfFileError = std.Io.Dir.CreateDirPathOpenError || std.Io.Dir.OpenError || std.Io.Dir.StatError || std.Io.File.OpenError || std.mem.Allocator.Error || std.Io.File.SetPermissionsError;
@@ -257,6 +259,25 @@ pub fn expand(self: Conf, path: []const u8, gpa: std.mem.Allocator) std.mem.Allo
             }
 
             break :blk start_str;
+        },
+        .windows => {
+            var start_idx: usize = 0;
+            var str = path;
+            while (std.mem.findScalarPos(u8, str, start_idx, '%')) |f_pos| {
+                const s_pos = std.mem.findScalarPos(u8, str, f_pos + 1, '%') orelse @panic("missing closing % in env variable");
+
+                const env_var = str[f_pos .. s_pos + 1];
+                const key = env_var[1 .. env_var.len - 1];
+                const replaced = try std.mem.replaceOwned(u8, gpa, str, env_var, self.emap.get(key) orelse env_var);
+                if (var_exp_alloced)
+                    gpa.free(str);
+
+                var_exp_alloced = true;
+                str = replaced;
+                start_idx = s_pos + 1;
+            }
+
+            break :blk str;
         },
         else => path,
     };
