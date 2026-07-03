@@ -8,6 +8,7 @@ const server_cli = server.cli;
 const command_exec = server_cli.command_exec;
 const ConnectionWorker = server.rxtx.ConnectionWorker;
 const NetAcceptor = server.rxtx.NetAcceptor;
+const GlobCtx = server.GlobCtx;
 
 const log = std.log.scoped(.@"server/cli/commands/run-pings");
 
@@ -42,7 +43,9 @@ fn runPing(args: []const []const u8, emap: *std.process.Environ.Map, gpa: std.me
         return err;
     };
 
-    var net_acc: NetAcceptor = .init(port_num);
+    const glob_ctx: GlobCtx = try .init(ctx.conf.*, gpa, io);
+
+    var net_acc: NetAcceptor = .init(port_num, &glob_ctx);
     defer net_acc.deinit(gpa, io);
 
     try net_acc.start(gpa, io);

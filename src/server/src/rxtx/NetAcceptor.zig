@@ -1,6 +1,9 @@
 const std = @import("std");
 const net = std.Io.net;
 
+const server = @import("server");
+const GlobCtx = server.GlobCtx;
+
 const Connection = @import("Connection.zig");
 const ConnectionWorker = @import("ConnectionWorker.zig");
 
@@ -16,13 +19,15 @@ pub const ConnectionTask = struct {
 };
 
 port: u16,
+glob_ctx: *const GlobCtx,
 connections: std.DoublyLinkedList,
 conn_lock: std.Io.Mutex = .init,
 accept_task: ?std.Io.Future(AcceptLoopError!void) = null,
 
-pub fn init(port: u16) NetAcceptor {
+pub fn init(port: u16, glob_ctx: *const GlobCtx) NetAcceptor {
     return .{
         .port = port,
+        .glob_ctx = glob_ctx,
         .connections = .{},
     };
 }
@@ -104,6 +109,7 @@ fn acceptLoop(self: *NetAcceptor, gpa: std.mem.Allocator, io: std.Io) AcceptLoop
                 .sec_auth = .init(null, io),
             },
         };
+        conn_task.conn.sec_auth.sign_key_pair = self.glob_ctx.sign_key_pair;
 
         try conn_task.conn.worker.start(io);
         errdefer conn_task.conn.worker.stop(io);

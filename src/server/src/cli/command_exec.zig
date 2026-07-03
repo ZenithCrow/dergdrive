@@ -3,7 +3,6 @@ const std = @import("std");
 const dergdrive = @import("dergdrive");
 const Command = dergdrive.cli.Command;
 const command_exec_root = dergdrive.cli.command_exec;
-const Conf = dergdrive.conf.Conf;
 const Env = dergdrive.conf.Env;
 const @"root-dir_opt" = dergdrive.cli.options.@"root-dir";
 const Option = dergdrive.cli.Option;
@@ -11,6 +10,7 @@ const parser = dergdrive.cli.parser;
 const server = @import("server");
 const server_cli = server.cli;
 const @"run-pings" = server_cli.commands.@"run-pings";
+const Conf = server.Conf;
 
 const log = std.log.scoped(.@"server/cli/command_exec");
 
@@ -70,7 +70,7 @@ pub const ParamContext = struct {
         };
         errdefer allocator.destroy(conf);
 
-        conf.* = .{ .emap = emap };
+        conf.* = .init(emap);
 
         const env = allocator.create(Env) catch |err| {
             log.err(Env.load_evs_err_notice, .{err});
@@ -78,7 +78,7 @@ pub const ParamContext = struct {
         };
         errdefer allocator.destroy(env);
 
-        env.* = .init(conf.*, allocator, io);
+        env.* = .init(conf.root_conf, allocator, io);
         errdefer env.deinit();
 
         env.loadEnvs() catch |err| {
