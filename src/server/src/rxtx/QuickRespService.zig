@@ -11,7 +11,7 @@ const Conf = server.Conf;
 const QuickResponseService = @This();
 
 const ver_msg_len = 2 * sync.header.header_size + sync.VersionChunk.content_size;
-const handshake_len = 2 * sync.header.header_size + sync.KeyXchgChunk.content_size;
+pub const handshake_len = 2 * sync.header.header_size + sync.KeyXchgChunk.content_size;
 
 const ver_msg_prep: [ver_msg_len]u8 = blk: {
     var msg_buf: [ver_msg_len]u8 = undefined;
@@ -20,7 +20,7 @@ const ver_msg_prep: [ver_msg_len]u8 = blk: {
     break :blk msg_buf;
 };
 
-pub fn getHandshake(sec_auth: SecAuth, buf: *[handshake_len]u8, io: std.Io) SecAuth.GetPubXchgKeySig!void {
+pub fn fillHandshake(sec_auth: SecAuth, buf: *[handshake_len]u8, io: std.Io) SecAuth.GetPubXchgKeySigError!void {
     std.mem.copyForwards(u8, buf[0..ver_msg_len], &ver_msg_prep);
 
     const sig = try sec_auth.getPubXchgKeySig(io);

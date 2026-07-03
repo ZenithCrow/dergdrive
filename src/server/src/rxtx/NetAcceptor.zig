@@ -6,6 +6,7 @@ const GlobCtx = server.GlobCtx;
 
 const Connection = @import("Connection.zig");
 const ConnectionWorker = @import("ConnectionWorker.zig");
+const QuickRespService = @import("QuickRespService.zig");
 
 const NetAcceptor = @This();
 
@@ -110,6 +111,12 @@ fn acceptLoop(self: *NetAcceptor, gpa: std.mem.Allocator, io: std.Io) AcceptLoop
             },
         };
         conn_task.conn.sec_auth.sign_key_pair = self.glob_ctx.sign_key_pair;
+
+        QuickRespService.fillHandshake(conn_task.conn.sec_auth, conn_task.conn.worker.write_buf[0..QuickRespService.handshake_len], io) catch |err| {
+            log.err("Failed to fill handshake with {f} due to error: {t}. Refusing connection.", .{ stream.socket.address, err });
+            continue;
+        };
+        conn_task.conn.worker.data_len = QuickRespService.handshake_len;
 
         try conn_task.conn.worker.start(io);
         errdefer conn_task.conn.worker.stop(io);

@@ -15,7 +15,7 @@ pub const VerifyError = error{
     OpenKnownHostsFailed,
     HostImpersonation,
 } || crypt.SignAlgo.Signature.VerifyError;
-pub const GetPubXchgKeySig = error{ MissingKeyPair, IdentityElement, NonCanonical, KeyMismatch, WeakPublicKey };
+pub const GetPubXchgKeySigError = error{ MissingKeyPair, IdentityElement, NonCanonical, KeyMismatch, WeakPublicKey };
 pub const GetSessionKeyError = error{IdentityElement};
 
 dh_key_pair: crypt.KeyxchAlgo.KeyPair,
@@ -59,9 +59,9 @@ pub fn getDHXchgPubKey(self: *SecAuth) [crypt.KeyxchAlgo.public_length]u8 {
     return self.dh_key_pair.public_key;
 }
 
-pub fn getPubXchgKeySig(self: SecAuth, io: std.Io) GetPubXchgKeySig!crypt.SignAlgo.Signature {
+pub fn getPubXchgKeySig(self: SecAuth, io: std.Io) GetPubXchgKeySigError!crypt.SignAlgo.Signature {
     if (self.sign_key_pair == null)
-        return GetPubXchgKeySig.MissingKeyPair;
+        return GetPubXchgKeySigError.MissingKeyPair;
 
     var noise: [crypt.SignAlgo.noise_length]u8 = undefined;
     io.random(&noise);
