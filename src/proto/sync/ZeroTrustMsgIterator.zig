@@ -20,7 +20,7 @@ pub fn nextMsg(self: *ZeroTrustMsgIterator, reader: *std.Io.Reader) std.Io.Reade
 
     var msg_len: usize = undefined;
     while (true) {
-        if (std.mem.find(u8, self.buf[self.seek..self.end], SyncMessage.header_title)) |msg_start| {
+        if (std.mem.findPos(u8, self.buf[0..self.end], self.seek, SyncMessage.header_title)) |msg_start| {
             if (self.end - msg_start >= header.header_size) {
                 msg_len = header.header_size + std.mem.readInt(header.DataLenT, self.buf[msg_start + header.header_title_size .. msg_start + header.header_title_size + header.data_len_size][0..header.data_len_size], .little);
                 if (msg_len <= dergdrive.proto.common.op_buf_size) {
@@ -46,6 +46,9 @@ pub fn nextMsg(self: *ZeroTrustMsgIterator, reader: *std.Io.Reader) std.Io.Reade
 
     const msg_start = self.seek;
     self.seek += msg_len;
+
+    log.debug("msg status: seek: {d}; end: {d}", .{ self.seek, self.end });
+    log.debug("returning msg: start: {d}; len: {d}", .{ msg_start, msg_len });
 
     return .{ .msg_buf = self.buf[msg_start .. msg_start + msg_len] };
 }

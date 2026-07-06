@@ -12,7 +12,7 @@ const log = std.log.scoped(.@"server/rxtx/ConnectionWorker");
 
 stream: net.Stream,
 write_buf: []u8,
-data_len: usize = 0,
+write_data_len: usize = 0,
 read_buf: []u8,
 write_lock: std.Io.Mutex = .init,
 write_cond: std.Io.Condition = .init,
@@ -49,15 +49,17 @@ pub fn start(self: *ConnectionWorker, io: std.Io) std.Io.ConcurrentError!void {
 /// idempotent
 pub fn stop(self: *ConnectionWorker, io: std.Io) void {
     if (self.read_task) |*t| {
-        t.cancel(io) catch |err| {
-            log.warn("Collecting net read task with error: {t}.", .{err});
+        t.cancel(io) catch |err| switch (err) {
+            std.Io.Cancelable.Canceled => {},
+            else => log.warn("Collecting net read task with error: {t}.", .{err}),
         };
         self.read_task = null;
     }
 
     if (self.write_task) |*t| {
-        t.cancel(io) catch |err| {
-            log.warn("Collecting net write task with error: {t}.", .{err});
+        t.cancel(io) catch |err| switch (err) {
+            std.Io.Cancelable.Canceled => {},
+            else => log.warn("Collecting net write task with error: {t}.", .{err}),
         };
         self.write_task = null;
     }
@@ -82,6 +84,8 @@ fn readLoop(self: *ConnectionWorker, io: std.Io) net.Stream.Reader.Error!void {
             },
         };
         var chunk_iter = msg.iter();
+
+        log.debug("read message", .{});
 
         const chunk = chunk_iter.next() catch |err| {
             log.warn("Failed to parse chunk due to error: {t}.", .{err});
@@ -112,15 +116,19 @@ fn writeLoop(self: *ConnectionWorker, io: std.Io) net.Stream.Writer.Error!void {
         try self.write_lock.lock(io);
         defer self.write_lock.unlock(io);
 
-        while (self.data_len == 0)
+        while (self.write_data_len == 0)
             try self.write_cond.wait(io, &self.write_lock);
 
-        writer.interface.writeAll(self.write_buf[0..self.data_len]) catch switch (writer.err.?) {
+        writer.interface.writeAll(self.write_buf[0..self.write_data_len]) catch switch (writer.err.?) {
             net.Stream.Writer.Error.Canceled => |e| return e,
             else => |e| {
                 log.err("Couldn't write to net writer due to error: {t}.", .{e});
                 return e;
             },
         };
+
+        log.debug("written {d} bytes", .{self.write_data_len});
+
+        self.write_data_len = 0;
     }
 }

@@ -11,6 +11,7 @@ pub const cli = struct {
         pub const @"test-pipe" = @import("cli/commands/test-pipe.zig");
         pub const @"test-sync" = @import("cli/commands/test-sync.zig");
         pub const @"probe-host" = @import("cli/commands/probe-host.zig");
+        pub const @"add-host" = @import("cli/commands/add-host.zig");
     };
 
     pub const options = struct {

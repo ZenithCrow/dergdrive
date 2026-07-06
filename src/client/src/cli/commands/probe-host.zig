@@ -118,6 +118,8 @@ fn probeServer(args: []const []const u8, emap: *Environ.Map, gpa: std.mem.Alloca
             return error.SubsystemFailure;
         };
 
+        log.debug("state changes: {d}", .{state_changes});
+
         for (0..state_changes) |_| {
             switch (req_stor.consumeCompletedWQ(&wqv, io).?.result.by_resp_type) {
                 .version => |v| {

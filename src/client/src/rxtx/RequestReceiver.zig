@@ -86,6 +86,7 @@ fn receiveLoop(self: *RequestReceiver, io: std.Io) std.Io.Cancelable!void {
         };
 
         if (chunk) |c| {
+            log.debug("Parsing chunk: {t}", .{c.chunk_type});
             switch (c.chunk_type) {
                 .request => {},
                 .version => {

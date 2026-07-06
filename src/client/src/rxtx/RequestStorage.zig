@@ -224,7 +224,7 @@ pub fn broadcastReceived(
         for (self.wait_q_vecs) |vec| {
             if (vec) |v| {
                 for (v.vec) |*wq| {
-                    if (std.meta.activeTag(wq.result) == std.meta.activeTag(identifier)) {
+                    if (!wq.received and std.meta.activeTag(wq.result) == std.meta.activeTag(identifier)) {
                         if (switch (wq.result) {
                             .by_id => |id| id == identifier.by_id,
                             .by_resp_type => |*rt| blk: {

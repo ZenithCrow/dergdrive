@@ -22,7 +22,10 @@ pub const command: cli.Command = .{
             return runPing(args, emap, gpa, io) catch |err| switch (err) {
                 cli.Command.ExecError.InvalidSyntax => @errorCast(err),
                 cli.Command.ExecError.TooFewArguments => @errorCast(err),
-                else => cli.Command.ExecError.ReturnStatusFailure,
+                else => blk: {
+                    log.err("Command failed due to error: {t}.", .{err});
+                    break :blk cli.Command.ExecError.ReturnStatusFailure;
+                },
             };
         }
     }.execFn,

@@ -286,20 +286,22 @@ pub fn expand(self: Conf, path: []const u8, gpa: std.mem.Allocator) std.mem.Allo
     return std.mem.replaceOwned(u8, gpa, var_exp, "{vol}", self.vol);
 }
 
-fn getFileContentFromPath(path: []const u8, allocator: std.mem.Allocator, io: std.Io) GetFileContentFromPathError![]const u8 {
+pub fn getFileContentFromPath(path: []const u8, allocator: std.mem.Allocator, io: std.Io) GetFileContentFromPathError![]const u8 {
     const file = try std.Io.Dir.cwd().openFile(io, path, .{});
     defer file.close(io);
 
     return getFileContent(file, allocator, io);
 }
 
-fn getFileContent(file: std.Io.File, allocator: std.mem.Allocator, io: std.Io) GetFileContentError![]const u8 {
+pub fn getFileContent(file: std.Io.File, allocator: std.mem.Allocator, io: std.Io) GetFileContentError![]const u8 {
+    const size = try file.length(io);
+    const buf = try allocator.alloc(u8, @intCast(size));
     var reader = file.reader(io, &.{});
-    return reader.interface.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
-        std.Io.Reader.ShortError.ReadFailed => return reader.err.?,
-        std.Io.Reader.LimitedAllocError.StreamTooLong => unreachable,
-        else => return std.mem.Allocator.Error.OutOfMemory,
+    reader.interface.readSliceAll(buf) catch |err| switch (err) {
+        std.Io.Reader.Error.ReadFailed => return reader.err.?,
+        std.Io.Reader.Error.EndOfStream => unreachable,
     };
+    return buf;
 }
 
 pub fn getConf(self: Conf, conf_file: ConfFile, allocator: std.mem.Allocator, io: std.Io) GetConfError![]const u8 {
@@ -322,7 +324,7 @@ pub fn openOrCreateConfFile(self: Conf, conf_file: ConfFile, truncate: bool, all
     const file_path = full_path[file_delim..];
 
     var dir = try std.Io.Dir.cwd().createDirPathOpen(io, dir_path, .{});
-    errdefer dir.close(io);
+    defer dir.close(io);
 
     const file = try dir.createFile(io, file_path, .{ .read = true, .truncate = truncate });
     errdefer file.close(io);
