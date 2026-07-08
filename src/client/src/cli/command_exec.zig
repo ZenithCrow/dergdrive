@@ -13,6 +13,7 @@ const vol_opt = options.vol;
 const @"include-rules_opt" = options.@"include-rules";
 const Conf = client.Conf;
 const server_opt = options.server;
+const @"add-host" = commands.@"add-host";
 const dergdrive = @import("dergdrive");
 const Command = dergdrive.cli.Command;
 const command_exec_root = dergdrive.cli.command_exec;
@@ -26,6 +27,7 @@ const port_opt = options_root.port;
 pub const command_list: []const Command = &(.{
     @"ls-include_cmd".command,
     @"probe-host_cmd".command,
+    @"add-host".command,
 } ++ if (builtin.mode == .Debug) .{
     @"test-sync_cmd".command,
     @"test-pipe_cmd".command,

@@ -7,9 +7,10 @@ const options = client.cli.options;
 const client_cli = client.cli;
 const command_exec = client_cli.command_exec;
 const server_opt = options.server;
-const service = client_cli.service;
+const ctx_service = client_cli.ctx_service;
 const rxtx = client.rxtx;
 const PrioReqService = rxtx.PrioReqService;
+const connection_service = rxtx.connection_service;
 const dergdrive = @import("dergdrive");
 const cli = dergdrive.cli;
 const root_cmd_exec = cli.command_exec;
@@ -54,10 +55,12 @@ const print_server_version_opt: cli.Option = .{
 };
 
 fn probeServer(args: []const []const u8, emap: *Environ.Map, gpa: std.mem.Allocator, io: std.Io) !void {
-    const ctx: service.ParamContext = try .init(args, emap, gpa, io);
+    const ctx: ctx_service.ParamContext = try .init(args, emap, gpa, io);
     defer ctx.deinit(gpa);
 
-    var conn = try service.connect(ctx, io);
+    const conn_details = try connection_service.getConnectionDetails(ctx);
+
+    var conn = try connection_service.connect(conn_details, io);
     defer conn.stream.close(io);
 
     var writer = conn.stream.writer(io, &.{});
@@ -141,7 +144,7 @@ fn probeServer(args: []const []const u8, emap: *Environ.Map, gpa: std.mem.Alloca
                     var verified: bool = undefined;
                     if (SecAuth.verifyDHXchgPubKeyAuthenticity(
                         ctx.conf.*,
-                        conn.address,
+                        conn.addr_str,
                         .fromBytes(k.signature),
                         k.pub_sign_key,
                         k.pub_xchg_key,

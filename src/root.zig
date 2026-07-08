@@ -62,6 +62,8 @@ pub const util = struct {
     pub const slc = @import("util/slc.zig");
     pub const sort = @import("util/sort.zig");
     pub const shared_slice = @import("util/shared_slice.zig");
+    pub const platform_dependent = @import("util/platform_dependent.zig");
+    pub const endl = platform_dependent.endl;
 };
 
 // pulled from zig 0.15 implementation

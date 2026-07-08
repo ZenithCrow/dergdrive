@@ -6,7 +6,7 @@ const include_rules_opt = options.@"include-rules";
 const vol_opt = options.vol;
 const client_cli = client.cli;
 const command_exec = client_cli.command_exec;
-const service = client_cli.service;
+const ctx_service = client_cli.ctx_service;
 const dergdrive = @import("dergdrive");
 const cli = dergdrive.cli;
 const conf = dergdrive.conf;
@@ -78,10 +78,10 @@ const Mode = enum {
 };
 
 inline fn lsInclude(args: []const []const u8, emap: *const std.process.Environ.Map, allocator: std.mem.Allocator, io: std.Io) !void {
-    const ctx: service.ParamContext = try .init(args, emap, allocator, io);
+    const ctx: ctx_service.ParamContext = try .init(args, emap, allocator, io);
     defer ctx.deinit(allocator);
 
-    var param_vals: service.ParamContextValues = try .init(ctx, allocator, io);
+    var param_vals: ctx_service.ParamContextValues = try .init(ctx, allocator, io);
     defer param_vals.deinit(allocator, io);
     // beyond this point, `root_path` and `include_rules_path` are not null
 

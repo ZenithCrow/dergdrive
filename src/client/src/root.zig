@@ -4,7 +4,7 @@ pub const Conf = @import("Conf.zig");
 
 pub const cli = struct {
     pub const command_exec = @import("cli/command_exec.zig");
-    pub const service = @import("cli/service.zig");
+    pub const ctx_service = @import("cli/ctx_service.zig");
 
     pub const commands = struct {
         pub const @"ls-include" = @import("cli/commands/ls-include.zig");
@@ -31,6 +31,7 @@ pub const track = struct {
 
 pub const rxtx = struct {
     pub const ChunkBuffer = @import("rxtx/ChunkBuffer.zig");
+    pub const connection_service = @import("rxtx/connection_service.zig");
     pub const Cryptor = @import("rxtx/Cryptor.zig");
     pub const FileReader = @import("rxtx/FileReader.zig");
     pub const RawFileChunkBuffer = @import("rxtx/RawFileChunkBuffer.zig");
