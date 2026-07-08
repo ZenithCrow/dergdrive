@@ -18,6 +18,8 @@ write_lock: std.Io.Mutex = .init,
 write_cond: std.Io.Condition = .init,
 read_task: ?std.Io.Future(net.Stream.Reader.Error!void) = null,
 write_task: ?std.Io.Future(net.Stream.Writer.Error!void) = null,
+active_lock: std.Io.Mutex = .init,
+active: bool = true,
 
 pub fn init(stream: net.Stream, gpa: std.mem.Allocator) std.mem.Allocator.Error!ConnectionWorker {
     const write_buf = try gpa.alloc(u8, common.op_buf_size);
@@ -70,18 +72,27 @@ fn readLoop(self: *ConnectionWorker, io: std.Io) net.Stream.Reader.Error!void {
     var msg_iter: ZeroTrustMsgIterator = .{ .buf = self.read_buf };
 
     while (true) {
-        const msg = msg_iter.nextMsg(&reader.interface) catch |err| switch (err) {
-            std.Io.Reader.Error.ReadFailed => switch (reader.err.?) {
-                net.Stream.Reader.Error.Canceled => |e| return e,
-                else => |e| {
-                    log.err("Couldn't read from net reader due to error: {t}.", .{e});
-                    return e;
+        const msg = msg_iter.nextMsg(&reader.interface) catch |err| {
+            {
+                self.active_lock.lockUncancelable(io);
+                defer self.active_lock.unlock(io);
+
+                self.active = false;
+            }
+
+            switch (err) {
+                std.Io.Reader.Error.ReadFailed => switch (reader.err.?) {
+                    net.Stream.Reader.Error.Canceled => |e| return e,
+                    else => |e| {
+                        log.err("Couldn't read from net reader due to error: {t}.", .{e});
+                        return e;
+                    },
                 },
-            },
-            std.Io.Reader.Error.EndOfStream => {
-                log.info("Client {f} disconnected.", .{self.stream.socket.address});
-                return;
-            },
+                std.Io.Reader.Error.EndOfStream => {
+                    log.info("Client {f} disconnected.", .{self.stream.socket.address});
+                    return;
+                },
+            }
         };
         var chunk_iter = msg.iter();
 
@@ -119,12 +130,21 @@ fn writeLoop(self: *ConnectionWorker, io: std.Io) net.Stream.Writer.Error!void {
         while (self.write_data_len == 0)
             try self.write_cond.wait(io, &self.write_lock);
 
-        writer.interface.writeAll(self.write_buf[0..self.write_data_len]) catch switch (writer.err.?) {
-            net.Stream.Writer.Error.Canceled => |e| return e,
-            else => |e| {
-                log.err("Couldn't write to net writer due to error: {t}.", .{e});
-                return e;
-            },
+        writer.interface.writeAll(self.write_buf[0..self.write_data_len]) catch {
+            {
+                self.active_lock.lockUncancelable(io);
+                defer self.active_lock.unlock(io);
+
+                self.active = false;
+            }
+
+            switch (writer.err.?) {
+                net.Stream.Writer.Error.Canceled => |e| return e,
+                else => |e| {
+                    log.err("Couldn't write to net writer due to error: {t}.", .{e});
+                    return e;
+                },
+            }
         };
 
         log.debug("written {d} bytes", .{self.write_data_len});

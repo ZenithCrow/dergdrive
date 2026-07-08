@@ -86,6 +86,31 @@ pub fn stop(self: *NetAcceptor, io: std.Io) void {
     }
 }
 
+fn cleanUpInactiveConnections(self: *NetAcceptor, gpa: std.mem.Allocator, io: std.Io) void {
+    self.conn_lock.lockUncancelable(io);
+    defer self.conn_lock.unlock(io);
+
+    var prev_node: ?*std.DoublyLinkedList.Node = null;
+    while (self.connections.last != prev_node) {
+        const cur_node = if (prev_node) |pn| pn.next.? else self.connections.first.?;
+        const task: *ConnectionTask = @fieldParentPtr("node", cur_node);
+
+        const clean_up = blk: {
+            task.conn.worker.active_lock.lockUncancelable(io);
+            defer task.conn.worker.active_lock.unlock(io);
+
+            break :blk !task.conn.worker.active;
+        };
+
+        if (clean_up) {
+            self.conn_lock.unlock(io);
+            defer self.conn_lock.lockUncancelable(io);
+
+            self.deinitTask(task, gpa, io);
+        } else prev_node = cur_node;
+    }
+}
+
 fn acceptLoop(self: *NetAcceptor, gpa: std.mem.Allocator, io: std.Io) AcceptLoopError!void {
     const ip4: net.Ip4Address = .unspecified(self.port);
     const addr: net.IpAddress = .{ .ip4 = ip4 };
@@ -93,9 +118,65 @@ fn acceptLoop(self: *NetAcceptor, gpa: std.mem.Allocator, io: std.Io) AcceptLoop
     defer tcp_server.deinit(io);
 
     while (true) {
-        const stream = try tcp_server.accept(io);
+        // clean up connections after successful or timed out accept
+        self.cleanUpInactiveConnections(gpa, io);
+
+        const stream = blk: {
+            var l: std.Io.Mutex = .init;
+            var c: std.Io.Condition = .init;
+            var event: bool = false;
+            var possible_stream: error{Timeout}!net.Stream = undefined;
+
+            var acc_future = try io.concurrent(struct {
+                pub fn acceptFn(s: *net.Server, lock: *std.Io.Mutex, cond: *std.Io.Condition, io_a: std.Io, out_event: *bool, out_stream: *(error{Timeout}!net.Stream)) net.Server.AcceptError!void {
+                    const stream = try s.accept(io_a);
+                    errdefer stream.close(io_a);
+
+                    {
+                        try lock.lock(io_a);
+                        defer lock.unlock(io_a);
+
+                        out_stream.* = stream;
+                        out_event.* = true;
+                    }
+
+                    cond.signal(io_a);
+                }
+            }.acceptFn, .{ &tcp_server, &l, &c, io, &event, &possible_stream });
+            defer acc_future.cancel(io) catch {};
+
+            var tout_future = try io.concurrent(struct {
+                pub fn timeoutFn(lock: *std.Io.Mutex, cond: *std.Io.Condition, io_t: std.Io, out_event: *bool, out_stream: *error{Timeout}!net.Stream) std.Io.Cancelable!void {
+                    try io_t.sleep(.fromSeconds(5), .awake);
+
+                    {
+                        try lock.lock(io_t);
+                        defer lock.unlock(io_t);
+
+                        if (!out_event.*) {
+                            out_stream.* = error.Timeout;
+                            out_event.* = true;
+                        }
+                    }
+
+                    cond.signal(io_t);
+                }
+            }.timeoutFn, .{ &l, &c, io, &event, &possible_stream });
+            defer tout_future.cancel(io) catch {};
+
+            try l.lock(io);
+            defer l.unlock(io);
+
+            while (!event)
+                try c.wait(io, &l);
+
+            if (possible_stream != error.Timeout)
+                break :blk possible_stream catch unreachable;
+
+            continue;
+        };
         errdefer stream.close(io);
-        log.debug("Accepted connection from {f}.", .{stream.socket.address});
+        log.info("Accepted connection from {f}.", .{stream.socket.address});
 
         var cw: ConnectionWorker = try .init(stream, gpa);
         errdefer cw.deinit(gpa, io);
