@@ -4,22 +4,22 @@ const net = std.Io.net;
 const dergdrive = @import("dergdrive");
 const cli = dergdrive.cli;
 const Option = cli.Option;
-const server = @import("server");
-const server_cli = server.cli;
-const command_exec = server_cli.command_exec;
 const root_cmd_exec = cli.command_exec;
-const ConnectionWorker = server.rxtx.ConnectionWorker;
-const NetAcceptor = server.rxtx.NetAcceptor;
-const GlobCtx = server.GlobCtx;
 const RootConf = dergdrive.conf.Conf;
 const parser = cli.parser;
 const crypt = dergdrive.crypt;
+const server = @import("server");
+const server_cli = server.cli;
+const command_exec = server_cli.command_exec;
+const ConnectionWorker = server.rxtx.ConnectionWorker;
+const NetAcceptor = server.rxtx.NetAcceptor;
+const GlobCtx = server.GlobCtx;
 
 const log = std.log.scoped(.@"server/cli/commands/gen-sign");
 
 pub const command: cli.Command = .{
     .name = "gen-sign",
-    .usage = "gen-sign [OPTIONS]",
+    .usage = "gen-sign",
     .desc = "Generate a sign key pair for the server",
     .exec_fn = struct {
         pub fn execFn(args: []const []const u8, emap: *std.process.Environ.Map, gpa: std.mem.Allocator, io: std.Io) cli.Command.ExecError!void {

@@ -14,7 +14,7 @@ const log = std.log.scoped(.@"server/cli/commands/run-pings");
 
 pub const command: cli.Command = .{
     .name = "run-pings",
-    .usage = "run-pings [OPTIONS]",
+    .usage = "run-pings",
     .desc = "Run in light mode, only respond to fixed selection of requests",
     .long_desc = "The server will neither process nor execute any storage requests and will respord only to 'ping' type requests.",
     .exec_fn = struct {

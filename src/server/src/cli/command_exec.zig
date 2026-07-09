@@ -11,11 +11,13 @@ const server = @import("server");
 const server_cli = server.cli;
 const @"run-pings" = server_cli.commands.@"run-pings";
 const Conf = server.Conf;
+const @"gen-sign" = server_cli.commands.@"gen-sign";
 
 const log = std.log.scoped(.@"server/cli/command_exec");
 
 pub const command_list: []const Command = &.{
     @"run-pings".command,
+    @"gen-sign".command,
 };
 
 pub fn printServerHelp(io: std.Io) void {

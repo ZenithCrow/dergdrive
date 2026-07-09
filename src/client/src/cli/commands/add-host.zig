@@ -146,12 +146,6 @@ fn addHost(args: []const []const u8, emap: *const Environ.Map, gpa: std.mem.Allo
         break :blk .{ with_port[0..port_idx], true };
     };
 
-    const hosts_file_check_it: RootConf.KeyValueIterator = .init(hosts_buf);
-    if (RootConf.getFromIter(hosts_file_check_it, address) != null) {
-        log.err("Host {s} is already known. To update the trusted public sign key, see 'renew-host' command.", .{address});
-        return error.HostAlreadyKnown;
-    }
-
     const server_pkey: crypt.SignAlgo.PublicKey = if (parser.getAssociatedValue(args, user_pub_key_opt.long, user_pub_key_opt.short, user_pub_key_opt.value.?.eql_sign)) |user_pkey| blk: {
         const base64_len = 4 * @as(u32, @intFromFloat(@ceil(@as(f32, @floatFromInt(@as(u32, @truncate(crypt.SignAlgo.PublicKey.encoded_length)))) / 3)));
         if (user_pkey.len != base64_len) {
@@ -182,6 +176,43 @@ fn addHost(args: []const []const u8, emap: *const Environ.Map, gpa: std.mem.Allo
         };
     };
 
+    var ip_buf: [64]u8 = undefined;
+    const final_addr = if (is_ip) blk: {
+        var ip_w: std.Io.Writer = .fixed(&ip_buf);
+
+        const ip_addr = net.IpAddress.parse(address, 0) catch unreachable;
+        ip_addr.format(&ip_w) catch unreachable;
+        const with_port = ip_w.buffered();
+        const port_idx = std.mem.findScalarLast(u8, with_port, ':').?;
+
+        break :blk with_port[0..port_idx];
+    } else address;
+
+    // leave some space for port
+    var final_addr_w_port_buf: [net.HostName.max_len + 10]u8 = undefined;
+    var fawp_w: std.Io.Writer = .fixed(&final_addr_w_port_buf);
+    if (ignore_port) {
+        fawp_w.writeAll(final_addr) catch unreachable;
+    } else {
+        const port_num = if (port_str) |p| std.fmt.parseInt(u16, p, 10) catch |err| {
+            log.err(connection_service.port_num_parse_msg, .{err});
+            return err;
+        } else {
+            log.err(port_opt.option.notSetErrorMsg("Server port"), .{});
+            return error.ServerPortNotSet;
+        };
+
+        fawp_w.print("{s}:{d}", .{ final_addr, port_num }) catch unreachable;
+    }
+
+    const final_addr_w_port = fawp_w.buffered();
+
+    const hosts_file_check_it: RootConf.KeyValueIterator = .init(hosts_buf);
+    if (RootConf.getFromIter(hosts_file_check_it, final_addr_w_port) != null) {
+        log.err("Host {s} is already known. To update the trusted public sign key, see 'renew-host' command.", .{address});
+        return error.HostAlreadyKnown;
+    }
+
     var w_buf: [128]u8 = undefined;
     var file_w = hosts_file.writer(io, &w_buf);
 
@@ -198,31 +229,7 @@ fn addHost(args: []const []const u8, emap: *const Environ.Map, gpa: std.mem.Allo
     if (hosts_file_len != 0)
         try file_w.interface.writeAll(util.endl);
 
-    var ip_buf: [64]u8 = undefined;
-    const final_addr = if (is_ip) blk: {
-        var ip_w: std.Io.Writer = .fixed(&ip_buf);
-
-        const ip_addr = net.IpAddress.parse(address, 0) catch unreachable;
-        ip_addr.format(&ip_w) catch unreachable;
-        const with_port = ip_w.buffered();
-        const port_idx = std.mem.findScalarLast(u8, with_port, ':').?;
-
-        break :blk with_port[0..port_idx];
-    } else address;
-
-    if (ignore_port) {
-        try file_w.interface.writeAll(final_addr);
-    } else {
-        const port_num = if (port_str) |p| std.fmt.parseInt(u16, p, 10) catch |err| {
-            log.err(connection_service.port_num_parse_msg, .{err});
-            return err;
-        } else {
-            log.err(port_opt.option.notSetErrorMsg("Server port"), .{});
-            return error.ServerPortNotSet;
-        };
-
-        try file_w.interface.print("{s}:{d}", .{ final_addr, port_num });
-    }
+    try file_w.interface.writeAll(final_addr_w_port);
 
     const server_pkey_slc = &server_pkey.toBytes();
     try file_w.interface.print("={b64}", .{server_pkey_slc});
