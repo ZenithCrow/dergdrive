@@ -4,7 +4,7 @@ const dergdrive = @import("dergdrive");
 const crypt = dergdrive.crypt;
 const RootConf = dergdrive.conf.Conf;
 const client = dergdrive.client;
-const Conf = client.Conf;
+const ClientConf = client.Conf;
 
 const SecAuth = @This();
 
@@ -27,31 +27,57 @@ pub fn init(key_pair: ?crypt.KeyxchAlgo.KeyPair, io: std.Io) SecAuth {
     return .{ .dh_key_pair = kp };
 }
 
+pub const HostIdentification = struct {
+    ip_addr: std.Io.net.IpAddress,
+    host_name: ?[]const u8,
+
+    pub fn format(
+        self: @This(),
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        if (self.host_name) |hn| {
+            try writer.print("'{s}' ({f})", .{ hn, self.ip_addr });
+        } else try self.ip_addr.format(writer);
+    }
+};
+
 pub fn verifyDHXchgPubKeyAuthenticity(
-    conf: Conf,
-    address_name: []const u8,
+    conf: ClientConf,
+    host_id: HostIdentification,
     signature: crypt.SignAlgo.Signature,
     pub_key: [crypt.SignAlgo.PublicKey.encoded_length]u8,
     dh_xchg_key: [crypt.KeyxchAlgo.public_length]u8,
     out_verified: *bool,
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     io: std.Io,
 ) VerifyError!void {
     out_verified.* = false;
-    try signature.verifyStrict(&dh_xchg_key, try .fromBytes(pub_key));
+
+    const pub_key_canon = crypt.SignAlgo.PublicKey.fromBytes(pub_key) catch {
+        log.warn("Queried key dumped: {b64}", .{pub_key});
+        log.err("Couldn't proceed with verifying signature because the public sign key is not canonical.", .{});
+        return VerifyError.NonCanonical;
+    };
+    try signature.verifyStrict(&dh_xchg_key, pub_key_canon);
     out_verified.* = true;
 
-    const host = conf.root_conf.get(conf.known_hosts, address_name, allocator, io) catch |err| switch (err) {
-        RootConf.GetConfError.FileNotFound => null,
+    const host_res: ClientConf.FindInKnownHostsResult = conf.findPubSignKeyInKnownHosts(host_id, pub_key_canon, gpa, io) catch |err| switch (err) {
+        RootConf.GetConfError.FileNotFound => .{
+            .last_match = null,
+            .key_match = false,
+        },
         else => {
             log.err("Failed to open known hosts file due to error: {t}.", .{err});
             return VerifyError.OpenKnownHostsFailed;
         },
     };
+    defer host_res.deinit(gpa);
 
-    if (host) |h| {
-        if (!std.mem.eql(u8, &pub_key, h))
+    if (host_res.last_match) |h| {
+        if (!host_res.key_match) {
+            log.info("Last matched host for {f}: {s}.", .{ host_id, h });
             return VerifyError.HostImpersonation;
+        }
     } else return VerifyError.FirstTimeHost;
 }
 

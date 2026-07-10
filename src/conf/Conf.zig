@@ -1,7 +1,12 @@
 const std = @import("std");
+const net = std.Io.net;
 const builtin = @import("builtin");
 
 const dergdrive = @import("dergdrive");
+const util = dergdrive.util;
+const SecAuth = dergdrive.SecAuth;
+const SignAlgo = dergdrive.crypt.SignAlgo;
+const connection_service = dergdrive.client.rxtx.connection_service;
 pub const proj_name: []const u8 = dergdrive.cli.command_exec.prog_name;
 
 const Conf = @This();
@@ -177,7 +182,7 @@ pub const KeyValueIterator = struct {
     line_iter: std.mem.SplitIterator(u8, .any),
 
     pub fn init(enf_file_buf: []const u8) KeyValueIterator {
-        return .{ .line_iter = std.mem.splitAny(u8, enf_file_buf, "\r\n") };
+        return .{ .line_iter = std.mem.splitAny(u8, enf_file_buf, util.endl) };
     }
 
     pub fn next(self: *KeyValueIterator) ?KVPair {
@@ -190,6 +195,77 @@ pub const KeyValueIterator = struct {
                         .value = line[delim + 1 ..],
                     };
                 }
+            }
+        } else null;
+    }
+};
+
+pub const PublicSignKeyIterator = struct {
+    pub const PSKKVPair = struct {
+        host: []const u8,
+        pub_key: SignAlgo.PublicKey,
+    };
+
+    iter: KeyValueIterator,
+    host_id: SecAuth.HostIdentification,
+
+    pub fn fromBuf(buf: []const u8, host_name: ?[]const u8, ip_addr: std.Io.net.IpAddress) PublicSignKeyIterator {
+        return .{
+            .iter = .init(buf),
+            .host_id = .{
+                .host_name = host_name,
+                .ip_addr = ip_addr,
+            },
+        };
+    }
+
+    pub fn next(self: *PublicSignKeyIterator) ?PSKKVPair {
+        var ip_addr_buf: [64]u8 = undefined;
+        var ip_addr_w: std.Io.Writer = .fixed(&ip_addr_buf);
+        self.host_id.ip_addr.format(&ip_addr_w) catch unreachable;
+        const ip_addr_str = ip_addr_w.buffered();
+        const port_idx = std.mem.findScalarLast(u8, ip_addr_str, ':').?;
+
+        return while (self.iter.next()) |kv| {
+            const n = .{ kv.key.len, null };
+            const key_port_idx: usize, const key_port_num: ?u16 = if (std.mem.findScalarLast(u8, kv.key, ':')) |kpi|
+                if (std.mem.findScalar(u8, kv.key, ':').? == kpi or kpi > 0 and kv.key[kpi - 1] == ']') .{
+                    kpi,
+                    std.fmt.parseInt(u16, kv.key[kpi + 1 ..], 10) catch |err| {
+                        log.warn("Error in key '{s}'. " ++ connection_service.port_num_parse_msg, .{ kv.key, err });
+                        continue;
+                    },
+                } else n
+            else
+                n;
+
+            const cmp_slc = kv.key[0..key_port_idx];
+            if (((if (self.host_id.host_name) |hn| std.mem.eql(u8, cmp_slc, hn) else false) or std.mem.eql(u8, cmp_slc, ip_addr_str[0..port_idx])) and if (key_port_num) |kpn| kpn == self.host_id.ip_addr.getPort() else true) {
+                var pub_key_buf: [SignAlgo.PublicKey.encoded_length]u8 = undefined;
+                const decoder = std.base64.standard.Decoder;
+                const decode_fail_msg = "Failed to decode (base64) public sign key of host '{s}' due to error: {t}.";
+                const expected_len = decoder.calcSizeForSlice(kv.value) catch |err| {
+                    log.warn(decode_fail_msg, .{ kv.key, err });
+                    continue;
+                };
+                if (expected_len != pub_key_buf.len) {
+                    const b64_key_len = comptime std.base64.standard.Encoder.calcSize(SignAlgo.PublicKey.encoded_length);
+                    log.warn(decode_fail_msg ++ " Key length in base64 must be {d} characters.", .{ kv.key, error.KeyLenMismatch, b64_key_len });
+                    continue;
+                }
+
+                decoder.decode(&pub_key_buf, kv.value) catch |err| {
+                    log.warn(decode_fail_msg, .{ kv.key, err });
+                    continue;
+                };
+
+                break .{
+                    .host = kv.key,
+                    .pub_key = SignAlgo.PublicKey.fromBytes(pub_key_buf[0..SignAlgo.PublicKey.encoded_length].*) catch {
+                        log.warn("Ignoring public sign key of host '{s}', because it is not canonical for ED25519.", .{kv.key});
+                        continue;
+                    },
+                };
             }
         } else null;
     }
@@ -404,6 +480,44 @@ pub fn set(self: Conf, env_file: ConfFile, key: []const u8, value: []const u8, a
 
         writer.interface.print("{s}={s}\n", .{ key, value }) catch return writer.err.?;
     }
+}
+
+test "public sign keys iterator" {
+    const key1 = "/H+xp947dDgJlSXBNIoI2IzHh9VLx9Vsgl8hdUb0104=";
+    const key2 = "xn8Lk84Q1r5J3B5u5TIRutL6q2UWYfhw5Rdmjcj0tgw=";
+    const key3 = "2knGd/uxY9voi7e97apaqom6LChIOmXaeFNhh94nH1g=";
+    const key4 = "jPphqoGuFdcNg5ab/WRuIvMqXy9FTRRmFIBAYBwVWqA=";
+
+    const host1 = "localhost:6767";
+    const host2 = "localhost";
+    const host3 = "dergdrive.pepa.dev";
+    const host4 = "145.182.60.77:6969";
+
+    const known_hosts_str = host1 ++ "=" ++ key1 ++ "\n" ++ host2 ++ "=" ++ key2 ++ "\n" ++ host3 ++ "=" ++ key3 ++ "\n" ++ host4 ++ "=" ++ key4 ++ "\n";
+
+    var b64_encode_buf: [key1.len]u8 = undefined;
+    const encoder = std.base64.standard.Encoder;
+
+    var iter: PublicSignKeyIterator = .fromBuf(known_hosts_str, "localhost", net.IpAddress.parse("127.0.0.1", 6767) catch unreachable);
+    _ = encoder.encode(&b64_encode_buf, &iter.next().?.pub_key.toBytes());
+    try std.testing.expectEqualStrings(key1, &b64_encode_buf);
+    _ = encoder.encode(&b64_encode_buf, &iter.next().?.pub_key.toBytes());
+    try std.testing.expectEqualStrings(key2, &b64_encode_buf);
+
+    iter = .fromBuf(known_hosts_str, "localhost", net.IpAddress.parse("127.0.0.1", 9999) catch unreachable);
+    _ = encoder.encode(&b64_encode_buf, &iter.next().?.pub_key.toBytes());
+    try std.testing.expectEqualStrings(key2, &b64_encode_buf);
+
+    iter = .fromBuf(known_hosts_str, "dergdrive.pepa.dev", net.IpAddress.parse("145.182.60.77", 6969) catch unreachable);
+    _ = encoder.encode(&b64_encode_buf, &iter.next().?.pub_key.toBytes());
+    try std.testing.expectEqualStrings(key3, &b64_encode_buf);
+    _ = encoder.encode(&b64_encode_buf, &iter.next().?.pub_key.toBytes());
+    try std.testing.expectEqualStrings(key4, &b64_encode_buf);
+
+    iter = .fromBuf(known_hosts_str, "dergdrive.pepa.dev", net.IpAddress.parse("145.182.60.77", 42069) catch unreachable);
+    _ = encoder.encode(&b64_encode_buf, &iter.next().?.pub_key.toBytes());
+    try std.testing.expectEqualStrings(key3, &b64_encode_buf);
+    try std.testing.expectEqual(null, iter.next());
 }
 
 test "inline conf values" {

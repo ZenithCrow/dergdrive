@@ -16,6 +16,7 @@ const cli = dergdrive.cli;
 const root_cmd_exec = cli.command_exec;
 const port_opt = cli.options.port;
 const SecAuth = dergdrive.SecAuth;
+const SignAlgo = dergdrive.crypt.SignAlgo;
 
 const log = std.log.scoped(.@"client/cli/commands/probe-server");
 
@@ -144,7 +145,10 @@ fn probeServer(args: []const []const u8, emap: *Environ.Map, gpa: std.mem.Alloca
                     var verified: bool = undefined;
                     if (SecAuth.verifyDHXchgPubKeyAuthenticity(
                         ctx.conf.*,
-                        conn.addr_str,
+                        .{
+                            .host_name = conn.host_name_str,
+                            .ip_addr = conn.resolved_ip,
+                        },
                         .fromBytes(k.signature),
                         k.pub_sign_key,
                         k.pub_xchg_key,

@@ -13,6 +13,7 @@ const vol_opt = options.vol;
 const @"include-rules_opt" = options.@"include-rules";
 const Conf = client.Conf;
 const server_opt = options.server;
+const connection_service = client.rxtx.connection_service;
 const dergdrive = @import("dergdrive");
 const Command = dergdrive.cli.Command;
 const command_exec_root = dergdrive.cli.command_exec;
@@ -22,6 +23,8 @@ const parser = dergdrive.cli.parser;
 const Env = dergdrive.conf.Env;
 const @"root-dir_opt" = dergdrive.cli.options.@"root-dir";
 const port_opt = options_root.port;
+const RootConf = dergdrive.conf.Conf;
+const SignAlgo = dergdrive.crypt.SignAlgo;
 
 const log = std.log.scoped(.@"client/cli/service");
 

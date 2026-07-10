@@ -24,6 +24,8 @@ pub const QueryServerPublicSignKeyError = error{
     ServerPublicSignKeyNonCanonical,
 } || std.Io.Cancelable || std.Io.ConcurrentError || std.mem.Allocator.Error || RequestStorage.AddWaitQueryVecError || RequestStorage.WaitForError;
 
+const ResolveError = net.HostName.ValidateError || net.HostName.LookupError || std.Io.Cancelable;
+
 const log = std.log.scoped(.@"client/rxtx/connection_service");
 
 pub const unresolvable_host_msg = "Host name '{s}' won't be resolved due the following issue: {t}.";
@@ -35,8 +37,8 @@ pub const ConnectionDetails = struct {
 };
 
 pub const Connection = struct {
-    ip_addr_str_buf: [64]u8 = undefined,
-    addr_str: []const u8,
+    host_name_str: []const u8,
+    resolved_ip: net.IpAddress,
     stream: Stream,
 };
 
@@ -62,41 +64,67 @@ pub fn getConnectionDetails(ctx: ParamContext) !ConnectionDetails {
     };
 }
 
+pub fn resolve(host_name: []const u8, service_port: u16, io: std.Io) ResolveError!net.IpAddress {
+    if (net.IpAddress.parse(host_name, service_port)) |ip_addr| return ip_addr else |_| {}
+
+    const host_name_s: net.HostName = try .init(host_name);
+    var canonical_name_buf: [net.HostName.max_len]u8 = undefined;
+    var lookup_buffer: [32]net.HostName.LookupResult = undefined;
+    var lookup_queue: std.Io.Queue(net.HostName.LookupResult) = .init(&lookup_buffer);
+
+    var lookup_future = io.async(net.HostName.lookup, .{
+        host_name_s, io, &lookup_queue,
+        net.HostName.LookupOptions{
+            .canonical_name_buffer = &canonical_name_buf,
+            .port = service_port,
+        },
+    });
+    defer lookup_future.cancel(io) catch {};
+
+    var canonical_name: net.HostName = undefined;
+    return while (lookup_queue.getOne(io)) |record| switch (record) {
+        .address => |a| break a,
+        .canonical_name => |n| {
+            canonical_name = n;
+            continue;
+        },
+    } else |err| switch (err) {
+        error.Canceled => |e| return e,
+        error.Closed => {
+            try lookup_future.await(io);
+
+            // If we already got one result, it broke out of the while loop. The only way for `lookup_queue` to be closed is the lookup error above
+            unreachable;
+        },
+    };
+}
+
 pub fn connect(conn_details: ConnectionDetails, io: std.Io) !Connection {
     const connect_options: std.Io.net.IpAddress.ConnectOptions = .{ .mode = .stream, .protocol = .tcp, .timeout = .none };
     const connect_err_msg = "Couldn't connect to host due to error: {t}.";
 
-    var connection: Connection = .{
-        .addr_str = undefined,
-        .stream = undefined,
-    };
-
-    const ip_addr = std.Io.net.IpAddress.parse(conn_details.host_name_str, conn_details.port) catch {
-        connection.addr_str = conn_details.host_name_str;
-        const host_name = std.Io.net.HostName.init(conn_details.host_name_str) catch |err| {
+    const ip_addr = resolve(conn_details.host_name_str, conn_details.port, io) catch |err| switch (err) {
+        ResolveError.NameTooLong, ResolveError.InvalidHostName => {
             log.err(unresolvable_host_msg, .{ conn_details.host_name_str, err });
             return error.UnresolvableHostName;
-        };
-
-        connection.stream = host_name.connect(io, conn_details.port, connect_options) catch |err| {
-            log.err(connect_err_msg, .{err});
-            return error.UnableToConnect;
-        };
-
-        return connection;
+        },
+        ResolveError.Canceled => return err,
+        else => {
+            log.err("Lookup of host name {s} failed due to error: {t}.", .{ conn_details.host_name_str, err });
+            return error.DnsLookupFailed;
+        },
     };
 
-    var addr_writer = std.Io.Writer.fixed(&connection.ip_addr_str_buf);
-    addr_writer.print("{f}", .{ip_addr}) catch unreachable;
-
-    log.debug("{f}", .{ip_addr});
-
-    connection.stream = ip_addr.connect(io, connect_options) catch |err| {
+    const stream = ip_addr.connect(io, connect_options) catch |err| {
         log.err(connect_err_msg, .{err});
         return error.UnableToConnect;
     };
 
-    return connection;
+    return .{
+        .host_name_str = conn_details.host_name_str,
+        .resolved_ip = ip_addr,
+        .stream = stream,
+    };
 }
 
 pub fn queryServerPublicSignKey(conn: Connection, gpa: std.mem.Allocator, io: std.Io) QueryServerPublicSignKeyError!SignAlgo.PublicKey {
