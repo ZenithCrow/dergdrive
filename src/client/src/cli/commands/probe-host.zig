@@ -75,14 +75,14 @@ fn probeServer(args: []const []const u8, emap: *Environ.Map, gpa: std.mem.Alloca
 
     const prio_req_service: PrioReqService = .{ .req_sender = &request_sender };
 
-    var reqest_receiver: rxtx.RequestReceiver = try .init(&reader.interface, &req_stor, gpa);
-    defer reqest_receiver.deinit(gpa);
+    var request_receiver: rxtx.RequestReceiver = try .init(&reader.interface, &req_stor, gpa);
+    defer request_receiver.deinit(gpa);
 
     try request_sender.start(io);
     defer request_sender.stop(io);
 
-    try reqest_receiver.start(io);
-    defer reqest_receiver.stop(io);
+    try request_receiver.start(io);
+    defer request_receiver.stop(io);
 
     var q_vec = [_]rxtx.RequestStorage.WaitQuery{
         .{
@@ -117,9 +117,27 @@ fn probeServer(args: []const []const u8, emap: *Environ.Map, gpa: std.mem.Alloca
     while (resolved_wqs < q_vec.len) {
         var state_changes: usize = undefined;
         req_stor.waitForIdx(wqv_idx, io, &state_changes) catch {
-            //  TODO: investigate
-            log.err("Subsystem failure.", .{});
-            return error.SubsystemFailure;
+            {
+                try request_sender.error_lock.lock(io);
+                defer request_sender.error_lock.unlock(io);
+
+                if (request_sender.err.? == error.WriteFailed) {
+                    log.err("Net writer encountered irrecoverable error: {t}", .{writer.err.?});
+                    return error.NetWriteFailed;
+                }
+            }
+
+            {
+                try request_receiver.error_lock.lock(io);
+                defer request_receiver.error_lock.unlock(io);
+
+                if (request_receiver.err.? == error.ReadFailed) {
+                    log.err("Net reader encountered irrecoverable error: {t}", .{reader.err.?});
+                    return error.NetReadFailed;
+                }
+            }
+
+            unreachable;
         };
 
         log.debug("state changes: {d}", .{state_changes});
@@ -143,7 +161,7 @@ fn probeServer(args: []const []const u8, emap: *Environ.Map, gpa: std.mem.Alloca
                     log.debug("signature: {b64}", .{k.signature});
 
                     var verified: bool = undefined;
-                    if (SecAuth.verifyDHXchgPubKeyAuthenticity(
+                    SecAuth.verifyDHXchgPubKeyAuthenticityLog(
                         ctx.conf.*,
                         .{
                             .host_name = conn.host_name_str,
@@ -155,15 +173,9 @@ fn probeServer(args: []const []const u8, emap: *Environ.Map, gpa: std.mem.Alloca
                         &verified,
                         gpa,
                         io,
-                    )) |_| {
-                        log.info("Server relation is healthy.", .{});
-                    } else |err| switch (err) {
-                        SecAuth.VerifyError.FirstTimeHost => log.warn("Authenticity of this host can't be verified, since it is not included in known hosts. Tread carefully. To add this host, use the 'add-host' command or edit the known hosts file.", .{}),
-                        SecAuth.VerifyError.HostImpersonation => log.err("The public key of this known host is different from the one it currently presents itself with. Tread extra carefully, someone might be trying to impersonate this host. If you are 100% sure the public key has changed, use the 'update-host' command or edit the known hosts file.", .{}),
-                        SecAuth.VerifyError.OpenKnownHostsFailed => log.err("Couldn't open known hosts file. The signature was successfully verified. Tread carefully.", .{}),
-                        SecAuth.VerifyError.SignatureVerificationFailed => log.err("Failed to verify host signature. This is a huge security risk. Tread extra carefully.", .{}),
-                        else => log.err("Couldn't verify host signature due to error: {t}. Tread extra carefully.", .{err}),
-                    }
+                    ) catch continue;
+
+                    log.info("Server relation is healthy.", .{});
                 },
                 else => unreachable,
             }

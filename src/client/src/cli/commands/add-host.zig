@@ -41,6 +41,7 @@ pub const command: Command = .{
         resolve_ip_opt,
         ignore_port_opt,
         user_pub_key_opt,
+        force_opt,
     },
 };
 
@@ -64,6 +65,12 @@ const user_pub_key_opt: Option = .{
         .eql_sign = true,
         .name = "PKEY",
     },
+};
+
+const force_opt: Option = .{
+    .long = "--force",
+    .short = 'f',
+    .desc = "Override public sign key of a known host",
 };
 
 fn addHost(args: []const []const u8, emap: *const Environ.Map, gpa: std.mem.Allocator, io: std.Io) !void {
@@ -208,36 +215,44 @@ fn addHost(args: []const []const u8, emap: *const Environ.Map, gpa: std.mem.Allo
     const final_addr_w_port = fawp_w.buffered();
 
     const hosts_file_check_it: RootConf.KeyValueIterator = .init(hosts_buf);
-    if (RootConf.getFromIter(hosts_file_check_it, final_addr_w_port) != null) {
-        log.err("Host {s} is already known. To update the trusted public sign key, see 'renew-host' command.", .{address});
-        return error.HostAlreadyKnown;
+    if (RootConf.getFromIter(hosts_file_check_it, final_addr_w_port)) |kh_pub_key| {
+        if (cli.parser.indexOfOption(args, force_opt.long, force_opt.short) == null) {
+            log.err("Host '{s}' is already known. To update the trusted public sign key, use '--force' with this command.", .{address});
+            return error.HostAlreadyKnown;
+        }
+
+        const encoder = std.base64.standard.Encoder;
+        var server_pkey_b64_buf: [encoder.calcSize(crypt.SignAlgo.PublicKey.encoded_length)]u8 = undefined;
+        const server_pkey_b64 = encoder.encode(&server_pkey_b64_buf, &server_pkey.toBytes());
+
+        if (!std.mem.eql(u8, kh_pub_key, server_pkey_b64)) {
+            ctx.conf.root_conf.set(ctx.conf.known_hosts, final_addr_w_port, server_pkey_b64, gpa, io) catch |err| {
+                log.err("Failed to overwrite public sign key of host '{s}' in known hosts file at {f} due to error: {t}.", .{ address, ctx.conf.known_hosts, err });
+                return error.KnownHostsOverwriteFailed;
+            };
+
+            log.info("Successfully overwritten ED25519 public sign key of host '{s}' from old: {s} to new: {s}", .{ address, kh_pub_key, server_pkey_b64 });
+        } else log.warn("No change to host '{s}' was made because the queried ED25519 public sign key remains the same: {s}", .{ address, server_pkey_b64 });
+    } else {
+        var w_buf: [128]u8 = undefined;
+        var file_w = hosts_file.writer(io, &w_buf);
+
+        const hosts_file_len = try hosts_file.length(io);
+        try file_w.seekToUnbuffered(hosts_file_len);
+
+        if (hosts_file_len != 0)
+            try file_w.interface.writeAll(util.endl);
+
+        try file_w.interface.writeAll(final_addr_w_port);
+
+        const server_pkey_slc = &server_pkey.toBytes();
+        try file_w.interface.print("={b64}", .{server_pkey_slc});
+        try file_w.flush();
+
+        const success_base_msg_start = "Successfully started trusting host '{s}' ";
+        const success_base_msg_end = "with ED25519 public sign key: {b64}";
+        if (std.mem.eql(u8, address, server_addr)) {
+            log.info(success_base_msg_start ++ success_base_msg_end, .{ address, server_pkey_slc });
+        } else log.info(success_base_msg_start ++ "(resolved to: {s}) " ++ success_base_msg_end, .{ server_addr, address, server_pkey_slc });
     }
-
-    var w_buf: [128]u8 = undefined;
-    var file_w = hosts_file.writer(io, &w_buf);
-
-    const hosts_file_len = hosts_file.length(io) catch |err| {
-        log.err("Failed to inquire length of known hosts file at {f} due to error: {t}.", .{ ctx.conf.known_hosts, err });
-        return error.FileLenInquiryFailed;
-    };
-
-    file_w.seekToUnbuffered(hosts_file_len) catch |err| {
-        log.err("Couldn't seek to file end due to error: {t}.", .{err});
-        return error.SeekFailed;
-    };
-
-    if (hosts_file_len != 0)
-        try file_w.interface.writeAll(util.endl);
-
-    try file_w.interface.writeAll(final_addr_w_port);
-
-    const server_pkey_slc = &server_pkey.toBytes();
-    try file_w.interface.print("={b64}", .{server_pkey_slc});
-    try file_w.flush();
-
-    const success_base_msg_start = "Successfully started trusting host '{s}' ";
-    const success_base_msg_end = "with ED25519 public sign key: {b64}";
-    if (std.mem.eql(u8, address, server_addr)) {
-        log.info(success_base_msg_start ++ success_base_msg_end, .{ address, server_pkey_slc });
-    } else log.info(success_base_msg_start ++ "(resolved to: {s}) " ++ success_base_msg_end, .{ server_addr, address, server_pkey_slc });
 }
