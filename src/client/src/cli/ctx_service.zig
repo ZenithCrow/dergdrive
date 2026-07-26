@@ -36,29 +36,31 @@ pub const ParamContext = struct {
     root_path: ?[]const u8 = null,
     include_rules_path: ?[]const u8 = null,
 
-    pub fn deinit(self: ParamContext, allocator: std.mem.Allocator) void {
-        allocator.destroy(self.conf);
+    pub fn deinit(self: ParamContext, gpa: std.mem.Allocator) void {
+        self.conf.deinit(gpa);
+        gpa.destroy(self.conf);
 
         self.env.deinit();
-        allocator.destroy(self.env);
+        gpa.destroy(self.env);
     }
 
-    pub fn init(args: []const []const u8, emap: *const std.process.Environ.Map, allocator: std.mem.Allocator, io: std.Io) dergdrive.cli.Command.ExecError!ParamContext {
-        const conf = allocator.create(Conf) catch |err| {
+    pub fn init(args: []const []const u8, emap: *const std.process.Environ.Map, gpa: std.mem.Allocator, io: std.Io) (dergdrive.cli.Command.ExecError || std.mem.Allocator.Error)!ParamContext {
+        const conf = gpa.create(Conf) catch |err| {
             log.err(Env.load_evs_err_notice, .{err});
             return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
         };
-        errdefer allocator.destroy(conf);
+        errdefer gpa.destroy(conf);
 
-        conf.* = .init("", emap);
+        conf.* = .{};
+        try conf.init("", emap, gpa);
 
-        const env = allocator.create(Env) catch |err| {
+        const env = gpa.create(Env) catch |err| {
             log.err(Env.load_evs_err_notice, .{err});
             return dergdrive.cli.Command.ExecError.ReturnStatusFailure;
         };
-        errdefer allocator.destroy(env);
+        errdefer gpa.destroy(env);
 
-        env.* = .init(conf.root_conf, allocator, io);
+        env.* = .init(conf.root_conf, gpa, io);
         errdefer env.deinit();
 
         env.loadEnvs() catch |err| {
@@ -67,11 +69,12 @@ pub const ParamContext = struct {
         };
 
         const vol = if (command_exec_root.getCliThenConfigValue(env, vol_opt.default_vol_opt_name, args, vol_opt.option)) |v| blk: {
-            conf.* = .init(v, emap);
+            conf.deinit(gpa);
+            try conf.init(v, emap, gpa);
 
             // replace env with newer one having volume context
             env.deinit();
-            env.* = .init(conf.root_conf, allocator, io);
+            env.* = .init(conf.root_conf, gpa, io);
             env.loadEnvs() catch |err| {
                 log.err(Env.load_evs_err_notice, .{err});
                 return dergdrive.cli.Command.ExecError.ReturnStatusFailure;

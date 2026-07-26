@@ -155,19 +155,126 @@ pub const ConfFile = struct {
     nspace: PfixNspace,
     sub_path: []const u8,
     always_create: bool = false,
+    resolved_path: []const u8 = undefined,
 
-    pub fn getFullPath(self: ConfFile, conf: Conf, allocator: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
+    pub fn init(self: *ConfFile, conf: Conf, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
+        self.resolved_path = try self.getFullPath(conf, gpa);
+    }
+
+    pub fn deinit(self: ConfFile, gpa: std.mem.Allocator) void {
+        gpa.free(self.resolved_path);
+    }
+
+    fn getFullPath(self: ConfFile, conf: Conf, allocator: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
         const root_path = self.nspace.getRoot();
         const expanded = try conf.expand(root_path, allocator);
         defer allocator.free(expanded);
         return std.mem.join(allocator, "/", &.{ expanded, self.sub_path });
     }
 
+    pub fn openOrCreate(conf_file: ConfFile, truncate: bool, io: std.Io) OpenOrCreateConfFileError!std.Io.File {
+        const full_path = conf_file.resolved_path;
+
+        const last_slash = std.mem.lastIndexOfScalar(u8, full_path, '/');
+        const dir_path = full_path[0 .. last_slash orelse 0];
+
+        const file_delim = if (last_slash) |pos| pos + 1 else 0;
+        const file_path = full_path[file_delim..];
+
+        var dir = try std.Io.Dir.cwd().createDirPathOpen(io, dir_path, .{});
+        defer dir.close(io);
+
+        const file = try dir.createFile(io, file_path, .{ .read = true, .truncate = truncate });
+        errdefer file.close(io);
+
+        if (builtin.os.tag != .windows) {
+            switch (conf_file.nspace.nspace) {
+                .cache, .config, .pers => |nspace| if (nspace == .secret) try file.setPermissions(io, .fromMode(0o600)),
+            }
+        }
+
+        return file;
+    }
+
+    pub fn getContent(self: ConfFile, allocator: std.mem.Allocator, io: std.Io) GetConfError![]const u8 {
+        return if (self.always_create) getFileContent(try self.openOrCreate(false, io), allocator, io) else {
+            return getFileContentFromPath(self.resolved_path, allocator, io);
+        };
+    }
+
+    pub fn write(self: ConfFile, truncate: bool, data: []const u8, io: std.Io) WriteConfFileError!void {
+        const file = try self.openOrCreate(truncate, io);
+        errdefer file.close(io);
+
+        var writer = file.writer(io, &.{});
+        return writer.interface.writeAll(data) catch writer.err.?;
+    }
+
+    pub fn getKeyValue(self: ConfFile, key: []const u8, gpa: std.mem.Allocator, io: std.Io) GetConfError!?[]const u8 {
+        const iter: KeyValueIterator = .init(try self.getContent(gpa, io));
+        defer gpa.free(iter.line_iter.buffer);
+        return if (getKeyValueFromIter(iter, key)) |value| try gpa.dupe(u8, value) else null;
+    }
+
+    pub fn getKeyValueFromIter(kv_iter: KeyValueIterator, key: []const u8) ?[]const u8 {
+        var iter_cpy = kv_iter;
+        iter_cpy.line_iter.index = 0;
+        return while (iter_cpy.next()) |entry| {
+            if (std.mem.eql(u8, entry.key, key))
+                break entry.value;
+        } else null;
+    }
+
+    pub fn setKeyValue(self: ConfFile, key: []const u8, value: []const u8, allocator: std.mem.Allocator, io: std.Io) SetError!void {
+        const file = try self.openOrCreate(false, io);
+        defer file.close(io);
+        const buf = try getFileContent(file, allocator, io);
+        defer allocator.free(buf);
+        var iter: KeyValueIterator = .init(buf);
+
+        var writer = file.writer(io, &.{});
+
+        var key_len: usize = 0;
+        var val_len: usize = 0;
+        var index: usize = 0;
+        const insert = while (iter.next()) |entry| : ({
+            if (iter.line_iter.index) |i|
+                index = i;
+        }) {
+            if (std.mem.eql(u8, entry.key, key)) {
+                key_len = entry.key.len;
+                val_len = entry.value.len;
+                index = entry.key.ptr - buf.ptr;
+                break true;
+            }
+        } else false;
+
+        if (insert) {
+            const tail_index = index + key_len + val_len + 1;
+            const len_diff: isize = @as(isize, @bitCast(value.len)) - @as(isize, @bitCast(val_len));
+            const new_len: usize = @bitCast(@as(isize, @bitCast(buf.len)) + len_diff);
+
+            writer.seekTo(index + key_len + 1) catch return writer.seek_err.?;
+            writer.interface.writeAll(value) catch return writer.err.?;
+            writer.interface.writeAll(buf[tail_index..]) catch return writer.err.?;
+            try file.setLength(io, new_len);
+        } else {
+            const end = try file.length(io);
+            const line_break = buf.len > 0 and buf[buf.len - 1] == '\n';
+
+            writer.seekTo(end) catch return writer.seek_err.?;
+            if (!line_break)
+                writer.interface.writeAll(util.endl) catch return writer.err.?;
+
+            writer.interface.print("{s}={s}\n", .{ key, value }) catch return writer.err.?;
+        }
+    }
+
     pub fn format(
         self: @This(),
         writer: *std.Io.Writer,
     ) std.Io.Writer.Error!void {
-        try writer.print("{s}/{s}", .{ self.nspace.getRoot(), self.sub_path });
+        try writer.writeAll(self.resolved_path);
     }
 };
 
@@ -283,10 +390,27 @@ pub const g_conf_file_hierarchy: []const ConfFile = switch (builtin.os.tag) {
 };
 
 conf_file_default: ConfFile = g_conf_file_default,
-conf_file_hierarchy: []const ConfFile = g_conf_file_hierarchy,
+conf_file_hierarchy_static: []const ConfFile = g_conf_file_hierarchy,
+conf_file_hierarchy: []ConfFile = undefined,
 emap: *const std.process.Environ.Map,
 // default value for compatiblity with server implementation (client should always override it)
 vol: []const u8 = "snudoo",
+
+pub fn init(self: *Conf, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
+    try self.conf_file_default.init(self.*, gpa);
+    self.conf_file_hierarchy = try gpa.dupe(ConfFile, self.conf_file_hierarchy_static);
+    for (self.conf_file_hierarchy) |*cf| {
+        try cf.init(self.*, gpa);
+    }
+}
+
+pub fn deinit(self: Conf, gpa: std.mem.Allocator) void {
+    self.conf_file_default.deinit(gpa);
+    for (self.conf_file_hierarchy) |cf| {
+        cf.deinit(gpa);
+    }
+    gpa.free(self.conf_file_hierarchy);
+}
 
 pub fn expand(self: Conf, path: []const u8, gpa: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
     var var_exp_alloced = false;
@@ -332,6 +456,7 @@ pub fn expand(self: Conf, path: []const u8, gpa: std.mem.Allocator) std.mem.Allo
                     gpa.free(start_str);
 
                 start_str = home_repl;
+                var_exp_alloced = true;
             }
 
             break :blk start_str;
@@ -378,108 +503,6 @@ pub fn getFileContent(file: std.Io.File, allocator: std.mem.Allocator, io: std.I
         std.Io.Reader.Error.EndOfStream => unreachable,
     };
     return buf;
-}
-
-pub fn getConf(self: Conf, conf_file: ConfFile, allocator: std.mem.Allocator, io: std.Io) GetConfError![]const u8 {
-    return if (conf_file.always_create) getFileContent(try self.openOrCreateConfFile(conf_file, false, allocator, io), allocator, io) else {
-        const full_path = try conf_file.getFullPath(self, allocator);
-        defer allocator.free(full_path);
-
-        return getFileContentFromPath(full_path, allocator, io);
-    };
-}
-
-pub fn openOrCreateConfFile(self: Conf, conf_file: ConfFile, truncate: bool, allocator: std.mem.Allocator, io: std.Io) OpenOrCreateConfFileError!std.Io.File {
-    const full_path = try conf_file.getFullPath(self, allocator);
-    defer allocator.free(full_path);
-
-    const last_slash = std.mem.lastIndexOfScalar(u8, full_path, '/');
-    const dir_path = full_path[0 .. last_slash orelse 0];
-
-    const file_delim = if (last_slash) |pos| pos + 1 else 0;
-    const file_path = full_path[file_delim..];
-
-    var dir = try std.Io.Dir.cwd().createDirPathOpen(io, dir_path, .{});
-    defer dir.close(io);
-
-    const file = try dir.createFile(io, file_path, .{ .read = true, .truncate = truncate });
-    errdefer file.close(io);
-
-    if (builtin.os.tag != .windows) {
-        switch (conf_file.nspace.nspace) {
-            .cache, .config, .pers => |nspace| if (nspace == .secret) try file.setPermissions(io, .fromMode(0o600)),
-        }
-    }
-
-    return file;
-}
-
-pub fn writeConfFile(self: Conf, conf_file: ConfFile, truncate: bool, data: []const u8, allocator: std.mem.Allocator, io: std.Io) WriteConfFileError!void {
-    const file = try self.openOrCreateConfFile(conf_file, truncate, allocator, io);
-    errdefer file.close(io);
-
-    var writer = file.writer(io, &.{});
-    return writer.interface.writeAll(data) catch writer.err.?;
-}
-
-pub fn get(self: Conf, env_file: ConfFile, key: []const u8, allocator: std.mem.Allocator, io: std.Io) GetConfError!?[]const u8 {
-    const iter: KeyValueIterator = .init(try self.getConf(env_file, allocator, io));
-    defer allocator.free(iter.line_iter.buffer);
-    return if (getFromIter(iter, key)) |value| try allocator.dupe(u8, value) else null;
-}
-
-pub fn getFromIter(kv_iter: KeyValueIterator, key: []const u8) ?[]const u8 {
-    var iter_cpy = kv_iter;
-    iter_cpy.line_iter.index = 0;
-    return while (iter_cpy.next()) |entry| {
-        if (std.mem.eql(u8, entry.key, key))
-            break entry.value;
-    } else null;
-}
-
-pub fn set(self: Conf, env_file: ConfFile, key: []const u8, value: []const u8, allocator: std.mem.Allocator, io: std.Io) SetError!void {
-    const file = try self.openOrCreateConfFile(env_file, false, allocator, io);
-    defer file.close(io);
-    const buf = try getFileContent(file, allocator, io);
-    defer allocator.free(buf);
-    var iter: KeyValueIterator = .init(buf);
-
-    var writer = file.writer(io, &.{});
-
-    var key_len: usize = 0;
-    var val_len: usize = 0;
-    var index: usize = 0;
-    const insert = while (iter.next()) |entry| : ({
-        if (iter.line_iter.index) |i|
-            index = i;
-    }) {
-        if (std.mem.eql(u8, entry.key, key)) {
-            key_len = entry.key.len;
-            val_len = entry.value.len;
-            index = entry.key.ptr - buf.ptr;
-            break true;
-        }
-    } else false;
-
-    if (insert) {
-        const tail_index = index + key_len + val_len + 1;
-        const len_diff: isize = @as(isize, @bitCast(value.len)) - @as(isize, @bitCast(val_len));
-        const new_len: usize = @bitCast(@as(isize, @bitCast(buf.len)) + len_diff);
-
-        writer.seekTo(index + key_len + 1) catch return writer.seek_err.?;
-        writer.interface.writeAll(value) catch return writer.err.?;
-        writer.interface.writeAll(buf[tail_index..]) catch return writer.err.?;
-        try file.setLength(io, new_len);
-    } else {
-        const end = try file.length(io);
-        const line_break = buf.len > 0 and buf[buf.len - 1] == '\n';
-
-        writer.seekTo(end) catch return writer.seek_err.?;
-        if (!line_break)
-            writer.interface.writeByte('\n') catch return writer.err.?;
-
-        writer.interface.print("{s}={s}\n", .{ key, value }) catch return writer.err.?;
-    }
 }
 
 test "public sign keys iterator" {
@@ -530,17 +553,22 @@ test "inline conf values" {
     var emap = try std.testing.environ.createMap(arena.allocator());
     defer emap.deinit();
 
-    const conf: Conf = .{ .emap = &emap };
-    const conf_file: ConfFile = .{ .nspace = .{ .nspace = .{ .config = .internal }, .pfix = .{ .config_internal = ".test" } }, .sub_path = "test.env" };
+    var conf: Conf = .{ .emap = &emap };
+    try conf.init(allocator);
+    defer conf.deinit(allocator);
 
-    try conf.set(conf_file, "key1", "fooooo", arena.allocator(), io);
-    try conf.set(conf_file, "key3", "baar", arena.allocator(), io);
-    try conf.set(conf_file, "key2", "owo", arena.allocator(), io);
-    try conf.set(conf_file, "key3", "third_key", arena.allocator(), io);
+    var conf_file: ConfFile = .{ .nspace = .{ .nspace = .{ .config = .internal }, .pfix = .{ .config_internal = ".test" } }, .sub_path = "test.env" };
+    try conf_file.init(conf, allocator);
+    defer conf_file.deinit(allocator);
 
-    const val1 = (try conf.get(conf_file, "key2", arena.allocator(), io)).?;
-    const val2 = (try conf.get(conf_file, "key1", arena.allocator(), io)).?;
-    const val3 = (try conf.get(conf_file, "key3", arena.allocator(), io)).?;
+    try conf_file.setKeyValue("key1", "fooooo", arena.allocator(), io);
+    try conf_file.setKeyValue("key3", "baar", arena.allocator(), io);
+    try conf_file.setKeyValue("key2", "owo", arena.allocator(), io);
+    try conf_file.setKeyValue("key3", "third_key", arena.allocator(), io);
+
+    const val1 = (try conf_file.getKeyValue("key2", arena.allocator(), io)).?;
+    const val2 = (try conf_file.getKeyValue("key1", arena.allocator(), io)).?;
+    const val3 = (try conf_file.getKeyValue("key3", arena.allocator(), io)).?;
 
     try std.testing.expectEqualStrings("owo", val1);
     try std.testing.expectEqualStrings("fooooo", val2);

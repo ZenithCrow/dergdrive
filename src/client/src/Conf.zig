@@ -22,18 +22,30 @@ const g_oride_prefixes: RootConf.ConfFile = .{ .nspace = .from(.{ .config = .vol
 const g_known_hosts: RootConf.ConfFile = .{ .nspace = .from(.{ .config = .user }), .sub_path = "known_hosts.cfg" };
 const g_access_tokens: RootConf.ConfFile = .{ .nspace = .from(.{ .pers = .secret }), .sub_path = "access_tokens" };
 
-root_conf: RootConf,
+root_conf: RootConf = .{ .emap = undefined },
 mfest_cache: RootConf.ConfFile = g_mfest_cache,
 oride_prefixes: RootConf.ConfFile = g_oride_prefixes,
 known_hosts: RootConf.ConfFile = g_known_hosts,
 access_tokens: RootConf.ConfFile = g_access_tokens,
 
-pub fn init(vol: []const u8, emap: *const std.process.Environ.Map) Conf {
-    return .{ .root_conf = .{
-        .emap = emap,
-        .conf_file_hierarchy = g_conf_file_hierarchy_client,
-        .vol = vol,
-    } };
+pub fn init(self: *Conf, vol: []const u8, emap: *const std.process.Environ.Map, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
+    self.root_conf.emap = emap;
+    self.root_conf.vol = vol;
+    try self.root_conf.init(gpa);
+
+    try self.mfest_cache.init(self.root_conf, gpa);
+    try self.oride_prefixes.init(self.root_conf, gpa);
+    try self.known_hosts.init(self.root_conf, gpa);
+    try self.access_tokens.init(self.root_conf, gpa);
+}
+
+pub fn deinit(self: Conf, gpa: std.mem.Allocator) void {
+    self.mfest_cache.deinit(gpa);
+    self.oride_prefixes.deinit(gpa);
+    self.known_hosts.deinit(gpa);
+    self.access_tokens.deinit(gpa);
+
+    self.root_conf.deinit(gpa);
 }
 
 pub const FindInKnownHostsResult = struct {
@@ -47,7 +59,7 @@ pub const FindInKnownHostsResult = struct {
 };
 
 pub fn findPubSignKeyInKnownHosts(self: Conf, host_id: SecAuth.HostIdentification, key: SignAlgo.PublicKey, gpa: std.mem.Allocator, io: std.Io) RootConf.GetConfError!FindInKnownHostsResult {
-    const known_hosts_buf = try self.root_conf.getConf(self.known_hosts, gpa, io);
+    const known_hosts_buf = try self.known_hosts.getContent(gpa, io);
     defer gpa.free(known_hosts_buf);
 
     var result: FindInKnownHostsResult = .{

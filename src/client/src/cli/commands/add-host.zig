@@ -77,7 +77,7 @@ fn addHost(args: []const []const u8, emap: *const Environ.Map, gpa: std.mem.Allo
     const ctx: ctx_service.ParamContext = try .init(args, emap, gpa, io);
     defer ctx.deinit(gpa);
 
-    const hosts_file = ctx.conf.root_conf.openOrCreateConfFile(ctx.conf.known_hosts, false, gpa, io) catch |err| {
+    const hosts_file = ctx.conf.known_hosts.openOrCreate(false, io) catch |err| {
         log.err("Couldn't open known hosts file at '{f}' due to error: {t}.", .{ ctx.conf.known_hosts, err });
         return error.OpenKnownHostsFailed;
     };
@@ -215,44 +215,35 @@ fn addHost(args: []const []const u8, emap: *const Environ.Map, gpa: std.mem.Allo
     const final_addr_w_port = fawp_w.buffered();
 
     const hosts_file_check_it: RootConf.KeyValueIterator = .init(hosts_buf);
-    if (RootConf.getFromIter(hosts_file_check_it, final_addr_w_port)) |kh_pub_key| {
+    const kh_pub_key = RootConf.ConfFile.getKeyValueFromIter(hosts_file_check_it, final_addr_w_port);
+    if (kh_pub_key != null) {
         if (cli.parser.indexOfOption(args, force_opt.long, force_opt.short) == null) {
             log.err("Host '{s}' is already known. To update the trusted public sign key, use '--force' with this command.", .{address});
             return error.HostAlreadyKnown;
         }
-
-        const encoder = std.base64.standard.Encoder;
-        var server_pkey_b64_buf: [encoder.calcSize(crypt.SignAlgo.PublicKey.encoded_length)]u8 = undefined;
-        const server_pkey_b64 = encoder.encode(&server_pkey_b64_buf, &server_pkey.toBytes());
-
-        if (!std.mem.eql(u8, kh_pub_key, server_pkey_b64)) {
-            ctx.conf.root_conf.set(ctx.conf.known_hosts, final_addr_w_port, server_pkey_b64, gpa, io) catch |err| {
-                log.err("Failed to overwrite public sign key of host '{s}' in known hosts file at {f} due to error: {t}.", .{ address, ctx.conf.known_hosts, err });
-                return error.KnownHostsOverwriteFailed;
-            };
-
-            log.info("Successfully overwritten ED25519 public sign key of host '{s}' from old: {s} to new: {s}", .{ address, kh_pub_key, server_pkey_b64 });
-        } else log.warn("No change to host '{s}' was made because the queried ED25519 public sign key remains the same: {s}", .{ address, server_pkey_b64 });
-    } else {
-        var w_buf: [128]u8 = undefined;
-        var file_w = hosts_file.writer(io, &w_buf);
-
-        const hosts_file_len = try hosts_file.length(io);
-        try file_w.seekToUnbuffered(hosts_file_len);
-
-        if (hosts_file_len != 0)
-            try file_w.interface.writeAll(util.endl);
-
-        try file_w.interface.writeAll(final_addr_w_port);
-
-        const server_pkey_slc = &server_pkey.toBytes();
-        try file_w.interface.print("={b64}", .{server_pkey_slc});
-        try file_w.flush();
-
-        const success_base_msg_start = "Successfully started trusting host '{s}' ";
-        const success_base_msg_end = "with ED25519 public sign key: {b64}";
-        if (std.mem.eql(u8, address, server_addr)) {
-            log.info(success_base_msg_start ++ success_base_msg_end, .{ address, server_pkey_slc });
-        } else log.info(success_base_msg_start ++ "(resolved to: {s}) " ++ success_base_msg_end, .{ server_addr, address, server_pkey_slc });
     }
+
+    // convert received key to base64 (guaranteed errorless)
+    const encoder = std.base64.standard.Encoder;
+    var server_pkey_b64_buf: [encoder.calcSize(crypt.SignAlgo.PublicKey.encoded_length)]u8 = undefined;
+    const server_pkey_b64 = encoder.encode(&server_pkey_b64_buf, &server_pkey.toBytes());
+
+    // compare the keys in base64 format
+    const key_different = if (kh_pub_key) |khpk| !std.mem.eql(u8, khpk, server_pkey_b64) else true;
+    if (key_different) {
+        ctx.conf.known_hosts.setKeyValue(final_addr_w_port, server_pkey_b64, gpa, io) catch |err| {
+            log.err("Failed to write public sign key of host '{s}' in known hosts file at {f} due to error: {t}.", .{ address, ctx.conf.known_hosts, err });
+            return error.KnownHostsWriteFailed;
+        };
+
+        if (kh_pub_key) |khpk| {
+            log.info("Successfully overwritten ED25519 public sign key of host '{s}' from old: {s} to new: {s}", .{ address, khpk, server_pkey_b64 });
+        } else {
+            const success_base_msg_start = "Successfully started trusting host '{s}' ";
+            const success_base_msg_end = "with ED25519 public sign key: {s}";
+            if (std.mem.eql(u8, address, server_addr)) {
+                log.info(success_base_msg_start ++ success_base_msg_end, .{ address, server_pkey_b64 });
+            } else log.info(success_base_msg_start ++ "(resolved to: {s}) " ++ success_base_msg_end, .{ server_addr, address, server_pkey_b64 });
+        }
+    } else log.warn("No change to host '{s}' was made because the queried ED25519 public sign key remains the same: {s}", .{ address, server_pkey_b64 });
 }

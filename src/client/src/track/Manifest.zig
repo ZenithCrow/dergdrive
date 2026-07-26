@@ -188,7 +188,7 @@ pub fn getSyncTimestamp(self: Manifest) LoadFromManifestFileError!Timestamp {
 }
 
 pub fn getSyncTimestampFromCachedManifest(self: Manifest) GetSyncTimestampFromCachedManifestError!?Timestamp {
-    const file = self.conf.root_conf.openOrCreateConfFile(self.conf.mfest_cache, false, self.allocator, self.io) catch |err| switch (err) {
+    const file = self.conf.mfest_cache.openOrCreate(false, self.io) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
@@ -206,7 +206,7 @@ pub fn getSyncTimestampFromCachedManifest(self: Manifest) GetSyncTimestampFromCa
 }
 
 pub fn openCachedManifest(self: *Manifest) RootConf.GetConfError!void {
-    self.mfest_file = .owned(self.conf.root_conf.getConf(self.conf.mfest_cache, self.allocator, self.io) catch |err| {
+    self.mfest_file = .owned(self.conf.mfest_cache.getContent(self.allocator, self.io) catch |err| {
         if (self.mfest_file) |mfest| {
             mfest.deinit();
         }
@@ -221,7 +221,7 @@ pub fn openCachedManifest(self: *Manifest) RootConf.GetConfError!void {
 }
 
 pub fn loadLocalPrefixOverrides(self: *Manifest) LoadLocalPrefixOverridesError!void {
-    const buf = try self.conf.root_conf.getConf(self.conf.oride_prefixes, self.allocator, self.io);
+    const buf = try self.conf.oride_prefixes.getContent(self.allocator, self.io);
     defer self.allocator.free(buf);
 
     var iter: RootConf.KeyValueIterator = .init(buf);
@@ -253,7 +253,7 @@ test "format id to hex" {
 }
 
 pub fn storeLocalPrefixOverrides(self: Manifest) StoreLocalPrefixOverridesError!void {
-    const file = try self.conf.root_conf.openOrCreateConfFile(self.conf.oride_prefixes, true, self.allocator, self.io);
+    const file = try self.conf.oride_prefixes.openOrCreate(true, self.io);
     var w_buf: [512]u8 = undefined;
     var writer = file.writer(self.io, &w_buf);
 
@@ -403,7 +403,10 @@ test "manifest parsing" {
     var emap = try std.testing.environ.createMap(arena);
     defer emap.deinit();
 
-    const conf: Conf = .init("vol1", &emap);
+    var conf: Conf = .{};
+    try conf.init("vol1", &emap, allocator);
+    defer conf.deinit(allocator);
+
     var manifest: Manifest = .init(conf, allocator, io);
     defer manifest.deinit();
 

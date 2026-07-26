@@ -46,7 +46,7 @@ fn genSign(args: []const []const u8, emap: *std.process.Environ.Map, gpa: std.me
     const ctx: command_exec.ParamContext = try .init(args, emap, gpa, io);
     defer ctx.deinit(gpa);
 
-    const existing_pub_key: ?[]const u8 = ctx.conf.root_conf.getConf(ctx.conf.public_sign_key, gpa, io) catch |err| switch (err) {
+    const existing_pub_key: ?[]const u8 = ctx.conf.public_sign_key.getContent(gpa, io) catch |err| switch (err) {
         RootConf.GetConfError.FileNotFound => null,
         else => {
             log.err("Failed to get contents of public sign key file '{f}' due to error: {t}", .{ ctx.conf.public_sign_key, err });
@@ -55,7 +55,7 @@ fn genSign(args: []const []const u8, emap: *std.process.Environ.Map, gpa: std.me
     };
     defer if (existing_pub_key) |pk| gpa.free(pk);
 
-    const existing_priv_key: ?[]const u8 = ctx.conf.root_conf.getConf(ctx.conf.private_sign_key, gpa, io) catch |err| switch (err) {
+    const existing_priv_key: ?[]const u8 = ctx.conf.private_sign_key.getContent(gpa, io) catch |err| switch (err) {
         RootConf.GetConfError.FileNotFound => null,
         else => {
             log.err("Failed to get contents of private sign key file '{f}' due to error: {t}", .{ ctx.conf.private_sign_key, err });
@@ -92,12 +92,12 @@ fn genSign(args: []const []const u8, emap: *std.process.Environ.Map, gpa: std.me
     log.info("Generating sign key pair...", .{});
 
     const sign_key_pair: crypt.SignAlgo.KeyPair = .generate(io);
-    ctx.conf.root_conf.writeConfFile(ctx.conf.public_sign_key, true, &sign_key_pair.public_key.toBytes(), gpa, io) catch |err| {
+    ctx.conf.public_sign_key.write(true, &sign_key_pair.public_key.toBytes(), io) catch |err| {
         log.err("Couldn't write public sign key due to error: {t}", .{err});
         return error.WritePubSignKeyFailed;
     };
 
-    ctx.conf.root_conf.writeConfFile(ctx.conf.private_sign_key, true, &sign_key_pair.secret_key.toBytes(), gpa, io) catch |err| {
+    ctx.conf.private_sign_key.write(true, &sign_key_pair.secret_key.toBytes(), io) catch |err| {
         log.err("Couldn't write private sign key due to error: {t}", .{err});
         return error.WritePrivSignKeyFailed;
     };

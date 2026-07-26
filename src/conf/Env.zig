@@ -21,8 +21,8 @@ const ConfFileContext = struct {
     conf: Conf,
 
     pub fn hash(self: ConfFileContext, c: Conf.ConfFile) u32 {
-        const key = c.getFullPath(self.conf, self.allocator) catch return 0;
-        defer self.allocator.free(key);
+        _ = self;
+        const key = c.resolved_path;
 
         var h: std.hash.Wyhash = .init(0);
         h.update(key);
@@ -30,11 +30,9 @@ const ConfFileContext = struct {
     }
 
     pub fn eql(self: ConfFileContext, x: Conf.ConfFile, y: Conf.ConfFile, _: usize) bool {
-        const a = x.getFullPath(self.conf, self.allocator) catch return false;
-        defer self.allocator.free(a);
-
-        const b = y.getFullPath(self.conf, self.allocator) catch return false;
-        defer self.allocator.free(b);
+        _ = self;
+        const a = x.resolved_path;
+        const b = y.resolved_path;
 
         return std.mem.eql(u8, a, b);
     }
@@ -71,7 +69,7 @@ pub fn deinit(self: *Env) void {
 
 pub fn loadEnvs(self: *Env) std.mem.Allocator.Error!void {
     for (self.conf.conf_file_hierarchy) |env_conf_file| {
-        var env_iter: Conf.KeyValueIterator = .init(self.conf.getConf(env_conf_file, self.allocator, self.io) catch |err| switch (err) {
+        var env_iter: Conf.KeyValueIterator = .init(env_conf_file.getContent(self.allocator, self.io) catch |err| switch (err) {
             Conf.GetConfError.OutOfMemory => |e| return e,
             Conf.GetConfError.FileNotFound => continue,
             else => {
@@ -102,7 +100,7 @@ pub fn storeEnvs(self: Env) StoreEnvsError!void {
 
     for (self.modified_envs.keys(), 0..) |env, i| {
         const buf_part = write_buf_size / env_count;
-        env_writers[i] = (try self.conf.openOrCreateConfFile(env, true, self.allocator, self.io)).writer(self.io, write_buf[buf_part * i .. buf_part * i + buf_part]);
+        env_writers[i] = (try env.openOrCreate(true, self.io)).writer(self.io, write_buf[buf_part * i .. buf_part * i + buf_part]);
     }
     defer {
         for (env_writers) |w| {
@@ -136,9 +134,7 @@ pub const GetWithCwdResult = struct {
 
 pub fn getWithCwd(self: Env, key: []const u8, iterate: bool, io: std.Io) GetWithCwdResultError!?GetWithCwdResult {
     if (self.env_registry.get(key)) |env_val| {
-        const full_path = try env_val.conf_file.getFullPath(self.conf, self.allocator);
-        defer self.allocator.free(full_path);
-
+        const full_path = env_val.conf_file.resolved_path;
         const last_slash = std.mem.lastIndexOfScalar(u8, full_path, '/');
 
         return .{
@@ -189,8 +185,8 @@ test "client env config" {
     var emap = try std.testing.environ.createMap(arena);
     defer emap.deinit();
 
-    var conf: client.Conf = .init("vol1", &emap);
-    var hierarchy = try allocator.dupe(Conf.ConfFile, conf.root_conf.conf_file_hierarchy);
+    var conf: client.Conf = .{};
+    var hierarchy = try allocator.dupe(Conf.ConfFile, conf.root_conf.conf_file_hierarchy_static);
     defer allocator.free(hierarchy);
 
     const pfix: Conf.ConfPrefix = .{
@@ -206,12 +202,15 @@ test "client env config" {
         cf.nspace.pfix = pfix;
     }
 
-    conf.root_conf.conf_file_hierarchy = hierarchy;
+    conf.root_conf.conf_file_hierarchy_static = hierarchy;
     conf.root_conf.conf_file_default.nspace.pfix = pfix;
 
     const weird_value: []const u8 = "hm = mmm - -ad -== 000";
 
     {
+        try conf.init("vol1", &emap, allocator);
+        defer conf.deinit(allocator);
+
         var env: Env = .init(conf.root_conf, allocator, io);
         defer env.deinit();
 
@@ -221,10 +220,18 @@ test "client env config" {
         try env.set("override me", "base", null);
         try std.testing.expectEqualStrings("base", env.get("override me").?);
 
-        try env.set("owo", "uwu", .{ .nspace = .{ .nspace = .{ .config = .global }, .pfix = pfix }, .sub_path = "cowonfig.env" });
+        var cf1: Conf.ConfFile = .{ .nspace = .{ .nspace = .{ .config = .global }, .pfix = pfix }, .sub_path = "cowonfig.env" };
+        try cf1.init(conf.root_conf, allocator);
+        defer cf1.deinit(allocator);
+
+        try env.set("owo", "uwu", cf1);
         try std.testing.expectEqualStrings("uwu", env.get("owo").?);
 
-        try env.set("yay", weird_value, .{ .nspace = .{ .nspace = .{ .config = .user }, .pfix = pfix }, .sub_path = "config" });
+        var cf2: Conf.ConfFile = .{ .nspace = .{ .nspace = .{ .config = .user }, .pfix = pfix }, .sub_path = "config" };
+        try cf2.init(conf.root_conf, allocator);
+        defer cf2.deinit(allocator);
+
+        try env.set("yay", weird_value, cf2);
         try std.testing.expectEqualStrings(weird_value, env.get("yay").?);
 
         try env.set("override me", "overridden", null);
@@ -238,9 +245,12 @@ test "client env config" {
     hierarchy = try allocator.realloc(hierarchy, hierarchy.len + 1);
     hierarchy[hierarchy.len - 1] = .{ .nspace = .{ .nspace = .{ .config = .global }, .pfix = pfix }, .sub_path = "cowonfig.env" };
 
-    conf.root_conf.conf_file_hierarchy = hierarchy;
+    conf.root_conf.conf_file_hierarchy_static = hierarchy;
 
     {
+        try conf.init("vol1", &emap, allocator);
+        defer conf.deinit(allocator);
+
         var env: Env = .init(conf.root_conf, allocator, io);
         defer env.deinit();
 
