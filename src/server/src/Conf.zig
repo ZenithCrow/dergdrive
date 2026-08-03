@@ -25,4 +25,6 @@ pub fn init(self: *Conf, emap: *const std.process.Environ.Map, gpa: std.mem.Allo
 pub fn deinit(self: Conf, gpa: std.mem.Allocator) void {
     self.private_sign_key.deinit(gpa);
     self.public_sign_key.deinit(gpa);
+
+    self.root_conf.deinit(gpa);
 }
