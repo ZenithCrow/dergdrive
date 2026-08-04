@@ -28,7 +28,7 @@ const ResolveError = net.HostName.ValidateError || net.HostName.LookupError || s
 
 const log = std.log.scoped(.@"client/rxtx/connection_service");
 
-pub const unresolvable_host_msg = "Host name '{s}' won't be resolved due the following issue: {t}.";
+pub const unresolvable_host_msg = "Hostname '{s}' won't be resolved due the following issue: {t}.";
 pub const port_num_parse_msg = "Couldn't parse port number due to error: {t}. Server port must be a 16-bit unsigned integer.";
 
 pub const ConnectionDetails = struct {
@@ -110,7 +110,7 @@ pub fn connect(conn_details: ConnectionDetails, io: std.Io) !Connection {
         },
         ResolveError.Canceled => return err,
         else => {
-            log.err("Lookup of host name {s} failed due to error: {t}.", .{ conn_details.host_name_str, err });
+            log.err("Lookup of hostname {s} failed due to error: {t}.", .{ conn_details.host_name_str, err });
             return error.DnsLookupFailed;
         },
     };

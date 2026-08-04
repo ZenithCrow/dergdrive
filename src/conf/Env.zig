@@ -227,7 +227,7 @@ test "client env config" {
         try env.set("owo", "uwu", cf1);
         try std.testing.expectEqualStrings("uwu", env.get("owo").?);
 
-        var cf2: Conf.ConfFile = .{ .nspace = .{ .nspace = .{ .config = .user }, .pfix = pfix }, .sub_path = "config" };
+        var cf2: Conf.ConfFile = .{ .nspace = .{ .nspace = .{ .config = .user }, .pfix = pfix }, .sub_path = Conf.config_filename };
         try cf2.init(conf.root_conf, allocator);
         defer cf2.deinit(allocator);
 

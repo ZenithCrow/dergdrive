@@ -257,7 +257,7 @@ pub fn storeLocalPrefixOverrides(self: Manifest) StoreLocalPrefixOverridesError!
     var w_buf: [512]u8 = undefined;
     var writer = file.writer(self.io, &w_buf);
 
-    writer.interface.print(local_prefix_disclaimer, .{RootConf.proj_name}) catch return writer.err.?;
+    writer.interface.writeAll(local_prefix_disclaimer) catch return writer.err.?;
 
     var iter = self.oride_pfixes.iterator();
     while (iter.next()) |kv| {

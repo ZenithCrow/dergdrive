@@ -29,13 +29,14 @@ pub fn init(key_pair: ?crypt.KeyxchAlgo.KeyPair, io: std.Io) SecAuth {
 
 pub const HostIdentification = struct {
     ip_addr: std.Io.net.IpAddress,
-    host_name: ?[]const u8,
+    hostname: ?[]const u8,
+    hostname_strict: bool,
 
     pub fn format(
         self: @This(),
         writer: *std.Io.Writer,
     ) std.Io.Writer.Error!void {
-        if (self.host_name) |hn| {
+        if (self.hostname) |hn| {
             try writer.print("'{s}' ({f})", .{ hn, self.ip_addr });
         } else try self.ip_addr.format(writer);
     }
@@ -70,7 +71,8 @@ pub fn verifyDHXchgPubKeyAuthenticity(
     if (host_res.last_match) |h| {
         std.debug.assert(host_res.last_match_key != null);
         if (!host_res.key_match) {
-            log.warn("Last matched host for {f}: {s}. Saved key dumped: {b64}", .{ host_id, h, host_res.last_match_key.?.toBytes() });
+            log.warn("Last matched host for {f}: {s}", .{ host_id, h });
+            log.warn("Key associated with this host dumped: {b64}", .{host_res.last_match_key.?.toBytes()});
             return VerifyError.HostImpersonation;
         }
     } else return VerifyError.FirstTimeHost;

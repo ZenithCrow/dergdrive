@@ -11,6 +11,7 @@ const ctx_service = client_cli.ctx_service;
 const rxtx = client.rxtx;
 const PrioReqService = rxtx.PrioReqService;
 const connection_service = rxtx.connection_service;
+const lenient_resolve_opt = client.cli.options.@"lenient-resolve";
 const dergdrive = @import("dergdrive");
 const cli = dergdrive.cli;
 const root_cmd_exec = cli.command_exec;
@@ -40,6 +41,7 @@ pub const command: cli.Command = .{
         options.vol.option,
         server_opt.option,
         port_opt.option,
+        lenient_resolve_opt.option,
         print_pubkey_opt,
         print_server_version_opt,
     },
@@ -164,8 +166,9 @@ fn probeServer(args: []const []const u8, emap: *Environ.Map, gpa: std.mem.Alloca
                     SecAuth.verifyDHXchgPubKeyAuthenticityLog(
                         ctx.conf.*,
                         .{
-                            .host_name = conn.host_name_str,
+                            .hostname = conn.host_name_str,
                             .ip_addr = conn.resolved_ip,
+                            .hostname_strict = cli.parser.indexOfOption(args, lenient_resolve_opt.option.long, lenient_resolve_opt.option.short) == null,
                         },
                         .fromBytes(k.signature),
                         k.pub_sign_key,

@@ -68,7 +68,7 @@ pub fn findPubSignKeyInKnownHosts(self: Conf, host_id: SecAuth.HostIdentificatio
         .key_match = false,
     };
 
-    var iter: RootConf.PublicSignKeyIterator = .fromBuf(known_hosts_buf, host_id.host_name, host_id.ip_addr);
+    var iter: RootConf.PublicSignKeyIterator = .fromBuf(known_hosts_buf, host_id);
     while (iter.next()) |kv| : ({
         result.last_match = kv.host;
         result.last_match_key = kv.pub_key;

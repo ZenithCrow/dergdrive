@@ -16,6 +16,7 @@ pub const cli = struct {
 
     pub const options = struct {
         pub const @"include-rules" = @import("cli/options/include-rules.zig");
+        pub const @"lenient-resolve" = @import("cli/options/lenient-resolve.zig");
         pub const vol = @import("cli/options/vol.zig");
         pub const server = @import("cli/options/server.zig");
     };

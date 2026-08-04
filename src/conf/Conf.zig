@@ -316,13 +316,10 @@ pub const PublicSignKeyIterator = struct {
     iter: KeyValueIterator,
     host_id: SecAuth.HostIdentification,
 
-    pub fn fromBuf(buf: []const u8, host_name: ?[]const u8, ip_addr: std.Io.net.IpAddress) PublicSignKeyIterator {
+    pub fn fromBuf(buf: []const u8, host_id: SecAuth.HostIdentification) PublicSignKeyIterator {
         return .{
             .iter = .init(buf),
-            .host_id = .{
-                .host_name = host_name,
-                .ip_addr = ip_addr,
-            },
+            .host_id = host_id,
         };
     }
 
@@ -347,7 +344,16 @@ pub const PublicSignKeyIterator = struct {
                 n;
 
             const cmp_slc = kv.key[0..key_port_idx];
-            if (((if (self.host_id.host_name) |hn| std.mem.eql(u8, cmp_slc, hn) else false) or std.mem.eql(u8, cmp_slc, ip_addr_str[0..port_idx])) and if (key_port_num) |kpn| kpn == self.host_id.ip_addr.getPort() else true) {
+            const has_hostname_eql = (if (self.host_id.hostname) |hn| std.mem.eql(u8, cmp_slc, hn) else null);
+            const ip_addr_eql = std.mem.eql(u8, cmp_slc, ip_addr_str[0..port_idx]);
+            const key_has_port_num_eql = if (key_port_num) |kpn| kpn == self.host_id.ip_addr.getPort() else null;
+
+            const match = if (self.host_id.hostname_strict)
+                (if (has_hostname_eql) |hhe| hhe else ip_addr_eql) and (key_has_port_num_eql orelse false)
+            else
+                ((has_hostname_eql orelse false) or ip_addr_eql) and key_has_port_num_eql orelse true;
+
+            if (match) {
                 var pub_key_buf: [SignAlgo.PublicKey.encoded_length]u8 = undefined;
                 const decoder = std.base64.standard.Decoder;
                 const decode_fail_msg = "Failed to decode (base64) public sign key of host '{s}' due to error: {t}.";
@@ -378,7 +384,7 @@ pub const PublicSignKeyIterator = struct {
     }
 };
 
-pub const config_filename = "config";
+pub const config_filename = "config.cfg";
 pub const g_conf_file_default: ConfFile = .{ .nspace = .from(.{ .config = .user }), .sub_path = config_filename, .always_create = true };
 pub const g_conf_file_hierarchy: []const ConfFile = switch (builtin.os.tag) {
     .linux, .windows => &.{
@@ -521,23 +527,23 @@ test "public sign keys iterator" {
     var b64_encode_buf: [key1.len]u8 = undefined;
     const encoder = std.base64.standard.Encoder;
 
-    var iter: PublicSignKeyIterator = .fromBuf(known_hosts_str, "localhost", net.IpAddress.parse("127.0.0.1", 6767) catch unreachable);
+    var iter: PublicSignKeyIterator = .fromBuf(known_hosts_str, .{ .hostname = "localhost", .ip_addr = net.IpAddress.parse("127.0.0.1", 6767) catch unreachable, .hostname_strict = false });
     _ = encoder.encode(&b64_encode_buf, &iter.next().?.pub_key.toBytes());
     try std.testing.expectEqualStrings(key1, &b64_encode_buf);
     _ = encoder.encode(&b64_encode_buf, &iter.next().?.pub_key.toBytes());
     try std.testing.expectEqualStrings(key2, &b64_encode_buf);
 
-    iter = .fromBuf(known_hosts_str, "localhost", net.IpAddress.parse("127.0.0.1", 9999) catch unreachable);
+    iter = .fromBuf(known_hosts_str, .{ .hostname = "localhost", .ip_addr = net.IpAddress.parse("127.0.0.1", 9999) catch unreachable, .hostname_strict = false });
     _ = encoder.encode(&b64_encode_buf, &iter.next().?.pub_key.toBytes());
     try std.testing.expectEqualStrings(key2, &b64_encode_buf);
 
-    iter = .fromBuf(known_hosts_str, "dergdrive.pepa.dev", net.IpAddress.parse("145.182.60.77", 6969) catch unreachable);
+    iter = .fromBuf(known_hosts_str, .{ .hostname = "dergdrive.pepa.dev", .ip_addr = net.IpAddress.parse("145.182.60.77", 6969) catch unreachable, .hostname_strict = false });
     _ = encoder.encode(&b64_encode_buf, &iter.next().?.pub_key.toBytes());
     try std.testing.expectEqualStrings(key3, &b64_encode_buf);
     _ = encoder.encode(&b64_encode_buf, &iter.next().?.pub_key.toBytes());
     try std.testing.expectEqualStrings(key4, &b64_encode_buf);
 
-    iter = .fromBuf(known_hosts_str, "dergdrive.pepa.dev", net.IpAddress.parse("145.182.60.77", 42069) catch unreachable);
+    iter = .fromBuf(known_hosts_str, .{ .hostname = "dergdrive.pepa.dev", .ip_addr = net.IpAddress.parse("145.182.60.77", 42069) catch unreachable, .hostname_strict = false });
     _ = encoder.encode(&b64_encode_buf, &iter.next().?.pub_key.toBytes());
     try std.testing.expectEqualStrings(key3, &b64_encode_buf);
     try std.testing.expectEqual(null, iter.next());

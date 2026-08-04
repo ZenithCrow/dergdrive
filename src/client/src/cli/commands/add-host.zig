@@ -48,13 +48,13 @@ pub const command: Command = .{
 const resolve_ip_opt: Option = .{
     .long = "--resolve-ip",
     .short = 'i',
-    .desc = "When provided with a host name, associate the obtained public key with the resolved ip address instead of the host name",
+    .desc = "When provided with a hostname, associate the obtained public key with the resolved ip address instead of the hostname",
 };
 
 const ignore_port_opt: Option = .{
     .long = "--ignore-port",
     .short = 'g',
-    .desc = "Ignore the given port and associate the obtained public key only with the host name / ip address",
+    .desc = "Ignore the given port and associate the obtained public key only with the hostname / ip address",
 };
 
 const user_pub_key_opt: Option = .{
@@ -133,7 +133,7 @@ fn addHost(args: []const []const u8, emap: *const Environ.Map, gpa: std.mem.Allo
             error.Canceled => |e| return e,
             error.Closed => {
                 lookup_future.await(io) catch |e| {
-                    log.err("Lookup of host name {s} (canonical form: {s}) failed due to error: {t}.", .{ server_addr, canonical_name.bytes, e });
+                    log.err("Lookup of hostname {s} (canonical form: {s}) failed due to error: {t}.", .{ server_addr, canonical_name.bytes, e });
                     return error.DnsLookupFailed;
                 };
 
@@ -218,7 +218,7 @@ fn addHost(args: []const []const u8, emap: *const Environ.Map, gpa: std.mem.Allo
     const kh_pub_key = RootConf.ConfFile.getKeyValueFromIter(hosts_file_check_it, final_addr_w_port);
     if (kh_pub_key != null) {
         if (cli.parser.indexOfOption(args, force_opt.long, force_opt.short) == null) {
-            log.err("Host '{s}' is already known. To update the trusted public sign key, use '--force' with this command.", .{address});
+            log.err("Host '{s}' is already known. To overwrite the trusted public sign key, use '--force' with this command.", .{address});
             return error.HostAlreadyKnown;
         }
     }

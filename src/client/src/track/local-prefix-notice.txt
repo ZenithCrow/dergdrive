@@ -1,4 +1,4 @@
-# This config file is generated and processed by {s} and is inteded to be edited directly.
+# This config file is generated and processed by dergdrive and is inteded to be edited directly.
 # Here you can configure path prefixes to be locally overridden, so that, for instance, a directory could be placed in a location different from the common location.
 # 
 # # foo/owo <- prefix at origin
